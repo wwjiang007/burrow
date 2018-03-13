@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"strings"
 
@@ -36,6 +39,10 @@ func main() {
 			fmt.Println(project.History.CurrentVersion().String())
 			os.Exit(0)
 		}
+		go func() {
+			log.Println(http.ListenAndServe("localhost:6060", nil))
+		}()
+
 		// We need to reflect on whether this obscures where values are coming from
 		conf := config.DefaultBurrowConfig()
 		// We treat logging a little differently in that if anything is set for logging we will not
