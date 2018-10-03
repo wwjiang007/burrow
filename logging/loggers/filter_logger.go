@@ -1,28 +1,19 @@
 package loggers
 
-import kitlog "github.com/go-kit/kit/log"
+import (
+	"github.com/go-kit/kit/log"
+	"github.com/hyperledger/burrow/logging/structure"
+)
 
 // Filter logger allows us to filter lines logged to it before passing on to underlying
 // output logger
-type filterLogger struct {
-	logger    kitlog.Logger
-	predicate func(keyvals []interface{}) bool
-}
-
-var _ kitlog.Logger = (*filterLogger)(nil)
-
-func (fl filterLogger) Log(keyvals ...interface{}) error {
-	if !fl.predicate(keyvals) {
-		return fl.logger.Log(keyvals...)
-	}
-	return nil
-}
-
 // Creates a logger that removes lines from output when the predicate evaluates true
-func NewFilterLogger(outputLogger kitlog.Logger,
-	predicate func(keyvals []interface{}) bool) kitlog.Logger {
-	return &filterLogger{
-		logger:    outputLogger,
-		predicate: predicate,
-	}
+func FilterLogger(outputLogger log.Logger, predicate func(keyvals []interface{}) bool) log.Logger {
+	return log.LoggerFunc(func(keyvals ...interface{}) error {
+		// Always forward signals
+		if structure.Signal(keyvals) != "" || !predicate(keyvals) {
+			return outputLogger.Log(keyvals...)
+		}
+		return nil
+	})
 }

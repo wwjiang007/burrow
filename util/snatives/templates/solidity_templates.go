@@ -20,15 +20,18 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/hyperledger/burrow/manager/burrow-mint/evm"
+	"github.com/hyperledger/burrow/execution/evm"
+	"github.com/iancoleman/strcase"
 )
 
-const contractTemplateText = `/**
+const contractTemplateText = `pragma solidity [[.SolidityPragmaVersion]];
+
+/**
 [[.Comment]]
 * @dev These functions can be accessed as if this contract were deployed at a special address ([[.Address]]).
 * @dev This special address is defined as the last 20 bytes of the sha3 hash of the the contract name.
 * @dev To instantiate the contract use:
-* @dev [[.Name]] [[.InstanceName]] = [[.Name]](address(sha3("[[.Name]]")));
+* @dev [[.Name]] [[.InstanceName]] = [[.Name]](address(keccak256("[[.Name]]")));
 */
 contract [[.Name]] {[[range .Functions]]
 [[.SolidityIndent 1]]
@@ -37,7 +40,7 @@ contract [[.Name]] {[[range .Functions]]
 const functionTemplateText = `/**
 [[.Comment]]
 */
-function [[.Name]]([[.ArgList]]) constant returns ([[.Return.TypeName]] [[.Return.Name]]);`
+function [[.Name]]([[.ArgList]]) public constant returns ([[.RetList]]);`
 
 // Solidity style guide recommends 4 spaces per indentation level
 // (see: http://solidity.readthedocs.io/en/develop/style-guide.html)
@@ -52,22 +55,23 @@ func init() {
 		Delims("[[", "]]").
 		Parse(functionTemplateText)
 	if err != nil {
-		panic(fmt.Errorf("Couldn't parse SNative function template: %s", err))
+		panic(fmt.Errorf("couldn't parse SNative function template: %s", err))
 	}
 	contractTemplate, err = template.New("SolidityContractTemplate").
 		Delims("[[", "]]").
 		Parse(contractTemplateText)
 	if err != nil {
-		panic(fmt.Errorf("Couldn't parse SNative contract template: %s", err))
+		panic(fmt.Errorf("couldn't parse SNative contract template: %s", err))
 	}
 }
 
 type solidityContract struct {
-	*vm.SNativeContractDescription
+	SolidityPragmaVersion string
+	*evm.SNativeContractDescription
 }
 
 type solidityFunction struct {
-	*vm.SNativeFunctionDescription
+	*evm.SNativeFunctionDescription
 }
 
 //
@@ -75,8 +79,11 @@ type solidityFunction struct {
 //
 
 // Create a templated solidityContract from an SNative contract description
-func NewSolidityContract(contract *vm.SNativeContractDescription) *solidityContract {
-	return &solidityContract{contract}
+func NewSolidityContract(contract *evm.SNativeContractDescription) *solidityContract {
+	return &solidityContract{
+		SolidityPragmaVersion:      ">=0.4.24",
+		SNativeContractDescription: contract,
+	}
 }
 
 func (contract *solidityContract) Comment() string {
@@ -95,7 +102,7 @@ func (contract *solidityContract) InstanceName() string {
 }
 
 func (contract *solidityContract) Address() string {
-	return fmt.Sprintf("0x%x",
+	return fmt.Sprintf("0x%s",
 		contract.SNativeContractDescription.Address())
 }
 
@@ -123,14 +130,22 @@ func (contract *solidityContract) Functions() []*solidityFunction {
 //
 
 // Create a templated solidityFunction from an SNative function description
-func NewSolidityFunction(function *vm.SNativeFunctionDescription) *solidityFunction {
+func NewSolidityFunction(function *evm.SNativeFunctionDescription) *solidityFunction {
 	return &solidityFunction{function}
 }
 
 func (function *solidityFunction) ArgList() string {
-	argList := make([]string, len(function.Args))
-	for i, arg := range function.Args {
-		argList[i] = fmt.Sprintf("%s %s", arg.TypeName, arg.Name)
+	argList := make([]string, len(function.Abi.Inputs))
+	for i, arg := range function.Abi.Inputs {
+		argList[i] = fmt.Sprintf("%s %s", arg.EVM.GetSignature(), param(arg.Name))
+	}
+	return strings.Join(argList, ", ")
+}
+
+func (function *solidityFunction) RetList() string {
+	argList := make([]string, len(function.Abi.Outputs))
+	for i, arg := range function.Abi.Outputs {
+		argList[i] = fmt.Sprintf("%s %s", arg.EVM.GetSignature(), param(arg.Name))
 	}
 	return strings.Join(argList, ", ")
 }
@@ -170,4 +185,8 @@ func comment(comment string) string {
 		}
 	}
 	return strings.Join(commentLines, "\n")
+}
+
+func param(name string) string {
+	return "_" + strcase.ToSnake(name)
 }

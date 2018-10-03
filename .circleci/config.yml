@@ -4,83 +4,76 @@
 defaults: &defaults
   working_directory: /go/src/github.com/hyperledger/burrow
   docker:
-    - image: circleci/golang:1.8.1
+    - image: hyperledger/burrow:ci
 
 tag_filters: &tags_filters
   tags:
     only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
 
 setup_docker: &setup_docker
-  version: 17.06.1-ce
+  version: 17.11.0-ce
 
 # Start of CircleCI 2.0 config
 version: 2
 jobs:
-  checkout_code:
-    <<: *defaults
-    steps:
-      - checkout
-      - run: go get github.com/Masterminds/glide
-      - run: glide install
-
-      # Just persist the entire working dir (burrow checkout)
-      - persist_to_workspace:
-          root: .
-          paths:
-            - .
   test:
     <<: *defaults
     steps:
-      - attach_workspace:
-          at: .
+      - run: echo $CIRCLE_PULL_REQUESTS
+      - checkout
       - run: make test
+      # In case we miss compile errors not pulled into test paths
+      - run: make build
 
   test_integration:
     <<: *defaults
     steps:
-      - attach_workspace:
-          at: .
+      - checkout
       - run: make test_integration
+
+  test_integration_bosmarmot:
+    <<: *defaults
+    steps:
+      - checkout
+      - run: make test_integration_bosmarmot
+      - store_artifacts:
+          path: ./.gopath_bos/src/github.com/monax/bosmarmot/monax/tests/burrow.log
+          destination: burrow.log
+      - store_artifacts:
+          path: ./.gopath_bos/src/github.com/monax/bosmarmot/monax/tests/keys.log
+          destination: keys.log
+
+  ensure_vendor:
+    <<: *defaults
+    steps:
+      - checkout
+      - run: make ensure_vendor
 
   build_docker:
     <<: *defaults
     steps:
-      - attach_workspace:
-          at: .
+      - checkout
         # This allows us to perform our docker builds
       - setup_remote_docker:
           <<: *setup_docker
-      - run: docker login -u $DOCKER_USER -p $DOCKER_PASS quay.io
         # build docker image and tag the docker image(s) depending on branch/tag
-      - run: make build_docker_db
-      - run: docker save quay.io/monax/db > db-images.tar
-      - persist_to_workspace:
-          root: .
-          paths:
-            - db-images.tar
+      - run: make docker_build
 
-  # Simple smoke test to ensure burrow binary has been provisioned to container
-  test_docker_smoke:
+  release_dev:
     <<: *defaults
     steps:
-      - attach_workspace:
-          at: .
       - setup_remote_docker:
           <<: *setup_docker
-      - run: docker login -u $DOCKER_USER -p $DOCKER_PASS quay.io
-      - run: docker load -i db-images.tar
-      - run: docker run quay.io/monax/db:$(./scripts/local_version.sh) burrow -h
+      - checkout
+      - run: make release_dev
 
-  push_docker:
+  release:
     <<: *defaults
     steps:
-      - attach_workspace:
-          at: .
       - setup_remote_docker:
           <<: *setup_docker
-      - run: docker login -u $DOCKER_USER -p $DOCKER_PASS quay.io
-      - run: docker load -i db-images.tar
-      - run: docker push quay.io/monax/db
+      - checkout
+      - run: make release
 
 
 workflows:
@@ -88,48 +81,44 @@ workflows:
 
   test_and_release:
     jobs:
-      - checkout_code:
-          # Rather annoyingly we need to include tags_filters on all transitive
-          # dependencies if we want the deploy job to build against a version
-          # tag.
-          # In contract jobs build against all branches by default
-          filters:
-            <<: *tags_filters
-            
       - test:
-          requires:
-            - checkout_code
           filters:
             <<: *tags_filters
 
       - test_integration:
-          requires:
-            - checkout_code
+          filters:
+            <<: *tags_filters
+
+      - test_integration_bosmarmot:
+          filters:
+            <<: *tags_filters
+
+      - ensure_vendor:
           filters:
             <<: *tags_filters
 
       - build_docker:
-          requires:
-            - checkout_code
-          filters:
-            <<: *tags_filters
-
-      - test_docker_smoke:
-          requires:
-            - build_docker
-          filters:
-            <<: *tags_filters
-
-      - push_docker:
-          requires:
-            - test
-            - test_integration
-            - test_docker_smoke
           filters:
             # tags filters and branch filters are applied disjunctively, so we
             # will still build tags not on develop (i.e. including tagged
             # releases on master that we specifically want to build)
             <<: *tags_filters
+
+      - release_dev:
+          requires:
+          - test
+          - test_integration
+          - test_integration_bosmarmot
+          filters:
             branches:
               only: develop
 
+      - release:
+          requires:
+          - test
+          - test_integration
+          - test_integration_bosmarmot
+          filters:
+            <<: *tags_filters
+            branches:
+              ignore: /.*/

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	kitlog "github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/log"
 )
 
-const logLineTimeout time.Duration = time.Second
+const logLineTimeout = time.Second
 
 type testLogger struct {
 	channelLogger *ChannelLogger
@@ -27,7 +27,7 @@ func (tl *testLogger) logLines(numberOfLines int) ([][]interface{}, error) {
 		case logLine := <-tl.logLineCh:
 			logLines[i] = logLine
 		case <-time.After(logLineTimeout):
-			return logLines, fmt.Errorf("Timed out waiting for log line "+
+			return logLines, fmt.Errorf("timed out waiting for log line "+
 				"(waited %s)", logLineTimeout)
 		}
 	}
@@ -49,8 +49,8 @@ func newTestLogger() *testLogger {
 
 func makeTestLogger(err error) *testLogger {
 	cl := NewChannelLogger(100)
-	logLineCh := make(chan ([]interface{}))
-	go cl.DrainForever(kitlog.LoggerFunc(func(keyvals ...interface{}) error {
+	logLineCh := make(chan []interface{})
+	go cl.DrainForever(log.LoggerFunc(func(keyvals ...interface{}) error {
 		logLineCh <- keyvals
 		return nil
 	}), nil)
@@ -61,8 +61,9 @@ func makeTestLogger(err error) *testLogger {
 	}
 }
 
+// Utility function that returns a slice of log lines.
 // Takes a variadic argument of log lines as a list of key value pairs delimited
-// by the empty string
+// by the empty string and splits
 func logLines(keyvals ...string) [][]interface{} {
 	llines := make([][]interface{}, 0)
 	line := make([]interface{}, 0)

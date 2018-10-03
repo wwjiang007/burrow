@@ -16,11 +16,13 @@ package loggers
 
 import (
 	"fmt"
+	"time"
 
+	"sync"
+
+	"github.com/go-kit/kit/log"
 	"github.com/hyperledger/burrow/logging/structure"
-
-	kitlog "github.com/go-kit/kit/log"
-	"github.com/hyperledger/burrow/word256"
+	"github.com/tmthrgd/go-hex"
 )
 
 // Logger that implements some formatting conventions for burrow and burrow-client
@@ -29,36 +31,38 @@ import (
 // decide how it wants to display values. Ideal candidates for 'early' formatting here are types that
 // we control and generic output loggers are unlikely to know about.
 type burrowFormatLogger struct {
-	logger kitlog.Logger
+	sync.Mutex
+	logger log.Logger
 }
 
-var _ kitlog.Logger = &burrowFormatLogger{}
+var _ log.Logger = &burrowFormatLogger{}
 
-func (efl *burrowFormatLogger) Log(keyvals ...interface{}) error {
-	if efl.logger == nil {
+func (bfl *burrowFormatLogger) Log(keyvals ...interface{}) error {
+	if bfl.logger == nil {
 		return nil
 	}
 	if len(keyvals)%2 != 0 {
-		return fmt.Errorf("Log line contains an odd number of elements so "+
+		return fmt.Errorf("log line contains an odd number of elements so "+
 			"was dropped: %v", keyvals)
 	}
-	return efl.logger.Log(structure.MapKeyValues(keyvals, burrowFormatKeyValueMapper)...)
+	keyvals = structure.MapKeyValues(keyvals,
+		func(key interface{}, value interface{}) (interface{}, interface{}) {
+			switch v := value.(type) {
+			case string:
+			case fmt.Stringer:
+				value = v.String()
+			case []byte:
+				value = hex.EncodeUpperToString(v)
+			case time.Time:
+				value = v.Format(time.RFC3339Nano)
+			}
+			return structure.StringifyKey(key), value
+		})
+	bfl.Lock()
+	defer bfl.Unlock()
+	return bfl.logger.Log(keyvals...)
 }
 
-func burrowFormatKeyValueMapper(key, value interface{}) (interface{}, interface{}) {
-	switch key {
-	default:
-		switch v := value.(type) {
-		case []byte:
-			return key, fmt.Sprintf("%X", v)
-		case word256.Word256:
-			return burrowFormatKeyValueMapper(key, v.Bytes())
-		}
-
-	}
-	return key, value
-}
-
-func BurrowFormatLogger(logger kitlog.Logger) *burrowFormatLogger {
+func BurrowFormatLogger(logger log.Logger) *burrowFormatLogger {
 	return &burrowFormatLogger{logger: logger}
 }

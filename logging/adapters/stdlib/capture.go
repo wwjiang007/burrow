@@ -16,25 +16,24 @@ package stdlib
 
 import (
 	"io"
-	"log"
+	stdlog "log"
 
-	kitlog "github.com/go-kit/kit/log"
-	"github.com/hyperledger/burrow/logging/types"
+	"github.com/go-kit/kit/log"
+	"github.com/hyperledger/burrow/logging"
 )
 
-func Capture(stdLibLogger log.Logger,
-	logger types.InfoTraceLogger) io.Writer {
+func Capture(stdLibLogger stdlog.Logger, logger *logging.Logger) io.Writer {
 	adapter := newAdapter(logger)
 	stdLibLogger.SetOutput(adapter)
 	return adapter
 }
 
-func CaptureRootLogger(logger types.InfoTraceLogger) io.Writer {
+func CaptureRootLogger(logger *logging.Logger) io.Writer {
 	adapter := newAdapter(logger)
-	log.SetOutput(adapter)
+	stdlog.SetOutput(adapter)
 	return adapter
 }
 
-func newAdapter(logger types.InfoTraceLogger) io.Writer {
-	return kitlog.NewStdlibAdapter(logger)
+func newAdapter(logger *logging.Logger) io.Writer {
+	return log.NewStdlibAdapter(logger.Trace)
 }
