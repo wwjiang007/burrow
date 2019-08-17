@@ -1,8 +1,12 @@
 # ----------------------------------------------------------
 # REQUIREMENTS
 
-# - go installed locally
-# - for build_docker: docker installed locally
+# - Go 1.12
+# - Make
+# - jq
+# - find
+# - bash
+# - protoc (for rebuilding protobuf files)
 
 # ----------------------------------------------------------
 
@@ -10,17 +14,29 @@ SHELL := /bin/bash
 REPO := $(shell pwd)
 GOFILES_NOVENDOR := $(shell go list -f "{{.Dir}}" ./...)
 PACKAGES_NOVENDOR := $(shell go list ./...)
-# Bosmarmot integration testing
-BOSMARMOT_PROJECT := github.com/monax/bosmarmot
-BOSMARMOT_GOPATH := ${REPO}/.gopath_bos
-BOSMARMOT_CHECKOUT := ${BOSMARMOT_GOPATH}/src/${BOSMARMOT_PROJECT}
 
-DOCKER_NAMESPACE := quay.io/monax
+# Protobuf generated go files
+PROTO_FILES = $(shell find . -path ./vendor -prune -o -path ./.gopath_bos -prune -o -type f -name '*.proto' -print)
+PROTO_GO_FILES = $(patsubst %.proto, %.pb.go, $(PROTO_FILES))
+PROTO_GO_FILES_REAL = $(shell find . -path ./vendor -prune -o -type f -name '*.pb.go' -print)
+
+# Our own Go files containing the compiled bytecode of solidity files as a constant
+SOLIDITY_FILES = $(shell find . -path ./vendor -prune -o -path ./tests -prune -o -type f -name '*.sol' -print)
+SOLIDITY_GO_FILES = $(patsubst %.sol, %.sol.go, $(SOLIDITY_FILES))
+SOLANG_FILES = $(shell find . -path ./vendor -prune -o -path ./tests -prune -o -type f -name '*.solang' -print)
+SOLANG_GO_FILES = $(patsubst %.solang, %.solang.go, $(SOLANG_FILES))
+
+CI_IMAGE="hyperledger/burrow:ci"
+
+GOPATH?=${HOME}/go
+BIN_PATH?=${GOPATH}/bin
+
+export GO111MODULE=on
 
 ### Formatting, linting and vetting
 
 # check the code for style standards; currently enforces go formatting.
-# display output first, then check for success	
+# display output first, then check for success
 .PHONY: check
 check:
 	@echo "Checking code for formatting style compliance."
@@ -40,7 +56,7 @@ fmt:
 	@gofmt -l -w ${GOFILES_NOVENDOR}
 
 # lint installs golint and prints recommendations for coding style.
-lint: 
+lint:
 	@echo "Running lint checks."
 	go get -u github.com/golang/lint/golint
 	@for file in $(GOFILES_NOVENDOR); do \
@@ -61,99 +77,160 @@ megacheck:
 	@go get honnef.co/go/tools/cmd/megacheck
 	@for pkg in ${PACKAGES_NOVENDOR}; do megacheck "$$pkg"; done
 
-### Dependency management for github.com/hyperledger/burrow
+# Protobuffing
+.PHONY: protobuf_deps
+protobuf_deps:
+	@go get -u github.com/gogo/protobuf/protoc-gen-gogo
+#	@go get -u github.com/golang/protobuf/protoc-gen-go
 
-# erase vendor wipes the full vendor directory
-.PHONY: erase_vendor
-erase_vendor:
-	rm -rf ${REPO}/vendor/
+# Implicit compile rule for GRPC/proto files (note since pb.go files no longer generated
+# in same directory as proto file this just regenerates everything
+%.pb.go: %.proto
+	protoc -I ./protobuf $< --gogo_out=plugins=grpc:${GOPATH}/src
 
-# install vendor uses dep to install vendored dependencies
-.PHONY: reinstall_vendor
-reinstall_vendor: erase_vendor
-	@go get -u github.com/golang/dep/cmd/dep
-	@dep ensure -v
+.PHONY: protobuf
+protobuf: $(PROTO_GO_FILES)
 
-# delete the vendor directy and pull back using dep lock and constraints file
-# will exit with an error if the working directory is not clean (any missing files or new
-# untracked ones)
-.PHONY: ensure_vendor
-ensure_vendor: reinstall_vendor
-	@scripts/is_checkout_dirty.sh
+.PHONY: clean_protobuf
+clean_protobuf:
+	@rm -f $(PROTO_GO_FILES_REAL)
 
-# dumps Solidity interface contracts for SNatives
-.PHONY: snatives
-snatives:
-	@go run ./util/snatives/cmd/main.go
+
+### PEG query grammar
+
+# This allows us to filter tagged objects with things like (EventID = 'foo' OR Height > 10) AND EventName CONTAINS 'frog'
+
+.PHONY: peg_deps
+peg_deps:
+	go get -u github.com/pointlander/peg
+
+# regenerate the parser
+.PHONY: peg
+peg:
+	peg event/query/query.peg
 
 ### Building github.com/hyperledger/burrow
 
+# Output commit_hash but only if we have the git repo (e.g. not in docker build
+.PHONY: commit_hash
+commit_hash:
+	@git status &> /dev/null && scripts/commit_hash.sh > commit_hash.txt || true
+
 # build all targets in github.com/hyperledger/burrow
 .PHONY: build
-build:	check build_db build_client
+build:	check build_burrow
 
 # build all targets in github.com/hyperledger/burrow with checks for race conditions
 .PHONY: build_race
-build_race:	check build_race_db build_race_client
+build_race:	check build_race_db
 
-# build burrow
-.PHONY: build_db
-build_db:
-	go build -o ${REPO}/bin/burrow ./cmd/burrow
+# build burrow and vent
+.PHONY: build_burrow
+build_burrow: commit_hash
+	go build -ldflags "-extldflags '-static' \
+	-X github.com/hyperledger/burrow/project.commit=$(shell cat commit_hash.txt) \
+	-X github.com/hyperledger/burrow/project.date=$(shell date '+%Y-%m-%d')" \
+	-o ${REPO}/bin/burrow ./cmd/burrow
 
-# build burrow-client
-.PHONY: build_client
-build_client:
-	go build -o ${REPO}/bin/burrow-client ./client/cmd/burrow-client
+# With the sqlite tag - enabling Vent sqlite adapter support, but building a CGO binary
+.PHONY: build_burrow_sqlite
+build_burrow_sqlite: commit_hash
+	go build -tags sqlite \
+	 -ldflags "-extldflags '-static' \
+	-X github.com/hyperledger/burrow/project.commit=$(shell cat commit_hash.txt) \
+	-X github.com/hyperledger/burrow/project.date=$(shell date -I)" \
+	-o ${REPO}/bin/burrow-vent-sqlite ./cmd/burrow
+
+.PHONY: install
+install: build_burrow
+	mkdir -p ${BIN_PATH}
+	install -T ${REPO}/bin/burrow ${BIN_PATH}/burrow
 
 # build burrow with checks for race conditions
 .PHONY: build_race_db
 build_race_db:
 	go build -race -o ${REPO}/bin/burrow ./cmd/burrow
 
-# build burrow-client with checks for race conditions
-.PHONY: build_race_client
-build_race_client:
-	go build -race -o ${REPO}/bin/burrow-client ./client/cmd/burrow-client
-
-
-# Get the Bosmarmot code
-.PHONY: bos
-bos: ./scripts/deps/bos.sh
-	scripts/git_get_revision.sh \
-	https://${BOSMARMOT_PROJECT}.git \
-	${BOSMARMOT_CHECKOUT} \
-	$(shell ./scripts/deps/bos.sh)
-
 ### Build docker images for github.com/hyperledger/burrow
 
 # build docker image for burrow
-.PHONY: build_docker_db
-build_docker_db: check
+.PHONY: docker_build
+docker_build: check commit_hash
 	@scripts/build_tool.sh
 
 ### Testing github.com/hyperledger/burrow
 
-# test burrow
+# Solidity fixtures
+%.sol.go: %.sol
+	@go run ./deploy/compile/solgo/main.go $^
+
+# Solidity fixtures
+%.solang.go: %.solang
+	@go run ./deploy/compile/solgo/main.go -wasm $^
+
+.PHONY: solidity
+solidity: $(SOLIDITY_GO_FILES)
+
+.PHONY: solang
+solang: $(SOLANG_GO_FILES)
+
+# node/js
+#
+# Install dependency
+.PHONY: npm_install
+npm_install:
+	npm install
+
+.PHONY: test_js
+test_js: bin/solc build_burrow
+	./tests/scripts/bin_wrapper.sh npm test
+
+# Test
+
 .PHONY: test
-test: check
-	@go test ${PACKAGES_NOVENDOR}
+test: check bin/solc
+# on circleci we might want to limit memory usage through GO_TEST_ARGS
+	@tests/scripts/bin_wrapper.sh go test ./... ${GO_TEST_ARGS}
 
+.PHONY: test_cover
+test_cover: check bin/solc
+	@tests/scripts/bin_wrapper.sh go test -coverprofile=c.out ./... ${GO_TEST_ARGS}
+	@tests/scripts/bin_wrapper.sh go tool cover -html=c.out -o coverage.html
+
+.PHONY: test_keys
+test_keys: build_burrow
+	burrow_bin="${REPO}/bin/burrow" tests/keys_server/test.sh
+
+.PHONY:	test_integration_vent
+test_integration_vent:
+	# Include sqlite adapter with tests - will build with CGO but that's probably fine
+	go test -v -tags 'integration sqlite' ./vent/...
+
+.PHONY:	test_integration_vent_postgres
+test_integration_vent_postgres:
+	docker-compose run burrow make test_integration_vent
+
+.PHONY: test_restore
+test_restore: build_burrow bin/solc
+	@tests/scripts/bin_wrapper.sh tests/dump/test.sh
+
+# Go will attempt to run separate packages in parallel
 .PHONY: test_integration
-test_integration:
-	@go get -u github.com/monax/bosmarmot/keys/cmd/monax-keys
-	@go test ./keys/integration -tags integration
-	@go test ./rpc/tm/integration -tags integration
+test_integration: test_keys test_deploy test_integration_vent_postgres test_restore
+	@go test -v -tags integration ./integration/...
 
-# Run integration test from bosmarmot (separated from other integration tests so we can
-# make exception when this test fails when we make a breaking change in Burrow)
-.PHONY: test_integration_bosmarmot
-test_integration_bosmarmot: bos build_db
-	cd "${BOSMARMOT_CHECKOUT}" &&\
-	GOPATH="${BOSMARMOT_GOPATH}" \
-	burrow_bin="${REPO}/bin/burrow" \
-	make test_integration_no_burrow
+.PHONY: test_integration_no_postgres
+test_integration_no_postgres: test_keys test_deploy test_integration_vent test_restore
+	@go test -v -tags integration ./integration/...
 
+.PHONY: test_deploy
+test_deploy: bin/solc build_burrow
+	@tests/scripts/bin_wrapper.sh tests/deploy.sh
+
+bin/solc: ./tests/scripts/deps/solc.sh
+	@mkdir -p bin
+	@tests/scripts/deps/solc.sh bin/solc
+	@touch bin/solc
 
 # test burrow with checks for race conditions
 .PHONY: test_race
@@ -186,8 +263,32 @@ NOTES.md: project/history.go project/cmd/notes/main.go
 docs: CHANGELOG.md NOTES.md
 
 # Tag the current HEAD commit with the current release defined in
-# ./release/release.go
+# ./project/history.go
 .PHONY: tag_release
 tag_release: test check CHANGELOG.md NOTES.md build
 	@scripts/tag_release.sh
 
+.PHONY: release
+release: docs check test docker_build
+	@scripts/is_checkout_dirty.sh || (echo "checkout is dirty so not releasing!" && exit 1)
+	@scripts/release.sh
+
+.PHONY: release_dev
+release_dev: test docker_build
+	@scripts/release_dev.sh
+
+.PHONY: build_ci_image
+build_ci_image:
+	docker build -t ${CI_IMAGE} -f ./.circleci/Dockerfile .
+
+.PHONY: push_ci_image
+push_ci_image: build_ci_image
+	docker push ${CI_IMAGE}
+
+.PHONY: ready_for_pull_request
+ready_for_pull_request: docs fix
+
+.PHONY: staticcheck
+staticcheck:
+	go get honnef.co/go/tools/cmd/staticcheck
+	staticcheck ./...

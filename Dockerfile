@@ -1,34 +1,45 @@
+# For solc binary
+FROM ethereum/solc:0.4.25 as solc-builder
 # We use a multistage build to avoid bloating our deployment image with build dependencies
-FROM golang:1.9.0-alpine3.6 as builder
-MAINTAINER Monax <support@monax.io>
+FROM golang:1.12.0-alpine3.9 as builder
 
-RUN apk add --no-cache --update git
+RUN apk add --no-cache --update git bash make
 
-ARG REPO=$GOPATH/src/github.com/hyperledger/burrow
+ARG REPO=/src/burrow
 COPY . $REPO
 WORKDIR $REPO
 
 # Build purely static binaries
-RUN go build --ldflags '-extldflags "-static"' -o bin/burrow ./cmd/burrow
-RUN go build --ldflags '-extldflags "-static"' -o bin/burrow-client ./client/cmd/burrow-client
+RUN make build
 
 # This will be our base container image
-FROM alpine:3.6
+FROM alpine:3.9
 
-ARG REPO=/go/src/github.com/hyperledger/burrow
+# Variable arguments to populate labels
+ARG USER=burrow
+ARG INSTALL_BASE=/usr/local/bin
 
-ENV USER monax
-ENV MONAX_PATH /home/$USER/.monax
+# Fixed labels according to container label-schema
+LABEL org.label-schema.schema-version="1.0"
+LABEL org.label-schema.name = "Burrow"
+LABEL org.label-schema.vendor="Hyperledger Burrow Authors"
+LABEL org.label-schema.description="Hyperledger Burrow is a permissioned Ethereum smart-contract blockchain node."
+LABEL org.label-schema.license="Apache-2.0"
+LABEL org.label-schema.vcs-url="https://github.com/hyperledger/burrow"
+
+# Run burrow as burrow user; not as root user
+ENV BURROW_PATH /home/$USER
 RUN addgroup -g 101 -S $USER && adduser -S -D -u 1000 $USER $USER
-WORKDIR $MONAX_PATH
-USER $USER:$USER
+WORKDIR $BURROW_PATH
 
 # Copy binaries built in previous stage
-COPY --from=builder $REPO/bin/* /usr/local/bin/
+COPY --from=builder /src/burrow/bin/burrow $INSTALL_BASE/
+COPY --from=solc-builder /usr/bin/solc $INSTALL_BASE/
 
-# Expose ports for 1337:burrow API; 46656:tendermint-peer; 46657:tendermint-rpc
-EXPOSE 1337
-EXPOSE 46656
-EXPOSE 46657
+# Expose ports for 26656:peer; 26658:info; 10997:grpc
+EXPOSE 26656
+EXPOSE 26658
+EXPOSE 10997
 
-CMD [ "burrow" ]
+USER $USER:$USER
+ENTRYPOINT [ "burrow" ]

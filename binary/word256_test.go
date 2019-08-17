@@ -3,7 +3,10 @@ package binary
 import (
 	"testing"
 
+	"encoding/json"
+
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWord256_UnpadLeft(t *testing.T) {
@@ -40,4 +43,20 @@ func TestLeftPadWord256(t *testing.T) {
 
 func TestOne256(t *testing.T) {
 	assert.Equal(t, Int64ToWord256(1), One256)
+}
+
+func TestWord256_MarshalText(t *testing.T) {
+	w := Word256{1, 2, 3, 4, 5}
+	out, err := json.Marshal(w)
+	require.NoError(t, err)
+	assert.Equal(t, "\"0102030405000000000000000000000000000000000000000000000000000000\"", string(out))
+	bs2 := new(Word256)
+	err = json.Unmarshal(out, bs2)
+	require.NoError(t, err)
+	assert.Equal(t, w, *bs2)
+}
+
+func TestInt64ToWord256(t *testing.T) {
+	i := int64(-34)
+	assert.Equal(t, i, Int64FromWord256(Int64ToWord256(i)))
 }

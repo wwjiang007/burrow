@@ -18,29 +18,20 @@ import (
 	"fmt"
 	"strings"
 
-	acm "github.com/hyperledger/burrow/account"
-	"github.com/hyperledger/burrow/permission/types"
+	"github.com/hyperledger/burrow/crypto"
 )
 
 //---------------------------------------------------------------------------------------------------
 // PermissionsTx.PermArgs interface and argument encoding
 
-type PermArgs struct {
-	PermFlag   types.PermFlag
-	Address    *acm.Address    `json:",omitempty"`
-	Permission *types.PermFlag `json:",omitempty"`
-	Role       *string         `json:",omitempty"`
-	Value      *bool           `json:",omitempty"`
-}
-
 func (pa PermArgs) String() string {
 	body := make([]string, 0, 5)
-	body = append(body, fmt.Sprintf("PermFlag: %s", PermissionsString(pa.PermFlag)))
-	if pa.Address != nil {
-		body = append(body, fmt.Sprintf("Address: %s", *pa.Address))
+	body = append(body, fmt.Sprintf("PermFlag: %v", String(pa.Action)))
+	if pa.Target != nil {
+		body = append(body, fmt.Sprintf("Address: %s", *pa.Target))
 	}
 	if pa.Permission != nil {
-		body = append(body, fmt.Sprintf("Permission: %s", PermissionsString(*pa.Permission)))
+		body = append(body, fmt.Sprintf("Permission: %v", String(*pa.Permission)))
 	}
 	if pa.Role != nil {
 		body = append(body, fmt.Sprintf("Role: %s", *pa.Role))
@@ -52,9 +43,9 @@ func (pa PermArgs) String() string {
 }
 
 func (pa PermArgs) EnsureValid() error {
-	pf := pa.PermFlag
+	pf := pa.Action
 	// Address
-	if pa.Address == nil && pf != SetGlobal {
+	if pa.Target == nil && pf != SetGlobal {
 		return fmt.Errorf("PermArgs for PermFlag %v requires Address to be provided but was nil", pf)
 	}
 	if pf == HasRole || pf == AddRole || pf == RemoveRole {
@@ -72,59 +63,59 @@ func (pa PermArgs) EnsureValid() error {
 	return nil
 }
 
-func HasBaseArgs(address acm.Address, permission types.PermFlag) PermArgs {
+func HasBaseArgs(address crypto.Address, permFlag PermFlag) PermArgs {
 	return PermArgs{
-		PermFlag:   HasBase,
-		Address:    &address,
-		Permission: &permission,
+		Action:     HasBase,
+		Target:     &address,
+		Permission: &permFlag,
 	}
 }
 
-func SetBaseArgs(address acm.Address, permission types.PermFlag, value bool) PermArgs {
+func SetBaseArgs(address crypto.Address, permFlag PermFlag, value bool) PermArgs {
 	return PermArgs{
-		PermFlag:   SetBase,
-		Address:    &address,
-		Permission: &permission,
+		Action:     SetBase,
+		Target:     &address,
+		Permission: &permFlag,
 		Value:      &value,
 	}
 }
 
-func UnsetBaseArgs(address acm.Address, permission types.PermFlag) PermArgs {
+func UnsetBaseArgs(address crypto.Address, permFlag PermFlag) PermArgs {
 	return PermArgs{
-		PermFlag:   UnsetBase,
-		Address:    &address,
-		Permission: &permission,
+		Action:     UnsetBase,
+		Target:     &address,
+		Permission: &permFlag,
 	}
 }
 
-func SetGlobalArgs(permission types.PermFlag, value bool) PermArgs {
+func SetGlobalArgs(permFlag PermFlag, value bool) PermArgs {
 	return PermArgs{
-		PermFlag:   SetGlobal,
-		Permission: &permission,
+		Action:     SetGlobal,
+		Permission: &permFlag,
 		Value:      &value,
 	}
 }
 
-func HasRoleArgs(address acm.Address, role string) PermArgs {
+func HasRoleArgs(address crypto.Address, role string) PermArgs {
 	return PermArgs{
-		PermFlag: HasRole,
-		Address:  &address,
-		Role:     &role,
+		Action: HasRole,
+		Target: &address,
+		Role:   &role,
 	}
 }
 
-func AddRoleArgs(address acm.Address, role string) PermArgs {
+func AddRoleArgs(address crypto.Address, role string) PermArgs {
 	return PermArgs{
-		PermFlag: AddRole,
-		Address:  &address,
-		Role:     &role,
+		Action: AddRole,
+		Target: &address,
+		Role:   &role,
 	}
 }
 
-func RemoveRoleArgs(address acm.Address, role string) PermArgs {
+func RemoveRoleArgs(address crypto.Address, role string) PermArgs {
 	return PermArgs{
-		PermFlag: RemoveRole,
-		Address:  &address,
-		Role:     &role,
+		Action: RemoveRole,
+		Target: &address,
+		Role:   &role,
 	}
 }

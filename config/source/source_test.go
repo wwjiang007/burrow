@@ -31,7 +31,7 @@ func TestFile(t *testing.T) {
 	file := writeConfigFile(t, newTestConfig())
 	defer os.Remove(file)
 	conf := new(animalConfig)
-	err := TOMLFile(file, false).Apply(conf)
+	err := File(file, false).Apply(conf)
 	assert.NoError(t, err)
 	assert.Equal(t, tomlString, TOMLString(conf))
 }
@@ -40,9 +40,9 @@ func TestCascade(t *testing.T) {
 	envVar := "FISH_SPOON_ALPHA"
 	// Both fall through so baseConfig returned
 	conf := newTestConfig()
-	err := Cascade(os.Stderr, true,
+	err := Cascade(true,
 		Environment(envVar),
-		TOMLFile("", false)).Apply(conf)
+		File("", false)).Apply(conf)
 	assert.NoError(t, err)
 	assert.Equal(t, newTestConfig(), conf)
 
@@ -51,9 +51,9 @@ func TestCascade(t *testing.T) {
 	file := writeConfigFile(t, fileConfig)
 	defer os.Remove(file)
 	conf = new(animalConfig)
-	err = Cascade(os.Stderr, true,
+	err = Cascade(true,
 		Environment(envVar),
-		TOMLFile(file, false)).Apply(conf)
+		File(file, false)).Apply(conf)
 	assert.NoError(t, err)
 	assert.Equal(t, TOMLString(fileConfig), TOMLString(conf))
 
@@ -64,11 +64,18 @@ func TestCascade(t *testing.T) {
 	}
 	os.Setenv(envVar, JSONString(envConfig))
 	conf = newTestConfig()
-	err = Cascade(os.Stderr, true,
+	err = Cascade(true,
 		Environment(envVar),
-		TOMLFile(file, false)).Apply(conf)
+		File(file, false)).Apply(conf)
 	assert.NoError(t, err)
 	assert.Equal(t, TOMLString(envConfig), TOMLString(conf))
+}
+
+func TestDetectFormat(t *testing.T) {
+	assert.Equal(t, TOML, DetectFormat(""))
+	assert.Equal(t, JSON, DetectFormat("{"))
+	assert.Equal(t, JSON, DetectFormat("\n\n\t    \n\n      {"))
+	assert.Equal(t, TOML, DetectFormat("[Tendermint]\n  Seeds =\"foobar@val0\"}"))
 }
 
 func writeConfigFile(t *testing.T, conf interface{}) string {

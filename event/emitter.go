@@ -16,108 +16,84 @@ package event
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"fmt"
-	"strings"
+	"math/rand"
 
+	"github.com/hyperledger/burrow/event/pubsub"
+	"github.com/hyperledger/burrow/event/query"
+	"github.com/hyperledger/burrow/logging"
 	"github.com/hyperledger/burrow/logging/structure"
-	logging_types "github.com/hyperledger/burrow/logging/types"
-	"github.com/hyperledger/burrow/server"
-	"github.com/tendermint/tmlibs/common"
-	"github.com/tendermint/tmlibs/pubsub"
+	"github.com/tendermint/tendermint/libs/common"
+	hex "github.com/tmthrgd/go-hex"
 )
 
 const DefaultEventBufferCapacity = 2 << 10
 
-type Subscribable interface {
-	// Subscribe to all events matching query, which is a valid tmlibs Query
-	Subscribe(ctx context.Context, subscriber string, query Queryable, out chan<- interface{}) error
-	// Unsubscribe subscriber from a specific query string
-	Unsubscribe(ctx context.Context, subscriber string, query Queryable) error
-	UnsubscribeAll(ctx context.Context, subscriber string) error
-}
+// TODO: manage the creation, closing, and draining of channels behind subscribe rather than only closing.
+// stop one subscriber from blocking everything!
 
-type Publisher interface {
-	Publish(ctx context.Context, message interface{}, tags map[string]interface{}) error
-}
-
-type Emitter interface {
-	Subscribable
-	Publisher
-	server.Server
-}
-
-// The events struct has methods for working with events.
-type emitter struct {
+// Emitter has methods for working with events
+type Emitter struct {
 	common.BaseService
 	pubsubServer *pubsub.Server
-	logger       logging_types.InfoTraceLogger
+	logger       *logging.Logger
 }
 
-func NewEmitter(logger logging_types.InfoTraceLogger) Emitter {
+// NewEmitter initializes an emitter struct with a pubsubServer
+func NewEmitter() *Emitter {
 	pubsubServer := pubsub.NewServer(pubsub.BufferCapacity(DefaultEventBufferCapacity))
 	pubsubServer.BaseService = *common.NewBaseService(nil, "Emitter", pubsubServer)
 	pubsubServer.Start()
-	return &emitter{
+	return &Emitter{
 		pubsubServer: pubsubServer,
-		logger:       logger.With(structure.ComponentKey, "Events"),
 	}
 }
 
-// core.Server
-func (em *emitter) Shutdown(ctx context.Context) error {
+// SetLogger attaches a log handler to this emitter
+func (em *Emitter) SetLogger(logger *logging.Logger) {
+	em.logger = logger.With(structure.ComponentKey, "Events")
+}
+
+// Shutdown stops the pubsubServer
+func (em *Emitter) Shutdown(ctx context.Context) error {
 	return em.pubsubServer.Stop()
 }
 
-// Publisher
-func (em *emitter) Publish(ctx context.Context, message interface{}, tags map[string]interface{}) error {
+// Publish tells the emitter to publish with the given message and tags
+func (em *Emitter) Publish(ctx context.Context, message interface{}, tags query.Tagged) error {
+	if em == nil || em.pubsubServer == nil {
+		return nil
+	}
 	return em.pubsubServer.PublishWithTags(ctx, message, tags)
 }
 
-// Subscribable
-func (em *emitter) Subscribe(ctx context.Context, subscriber string, query Queryable, out chan<- interface{}) error {
-	pubsubQuery, err := query.Query()
+// Subscribe tells the emitter to listen for messages on the given query
+func (em *Emitter) Subscribe(ctx context.Context, subscriber string, queryable query.Queryable, bufferSize int) (<-chan interface{}, error) {
+	qry, err := queryable.Query()
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return em.pubsubServer.Subscribe(ctx, subscriber, pubsubQuery, out)
+	return em.pubsubServer.Subscribe(ctx, subscriber, qry, bufferSize)
 }
 
-func (em *emitter) Unsubscribe(ctx context.Context, subscriber string, query Queryable) error {
-	pubsubQuery, err := query.Query()
+// Unsubscribe tells the emitter to stop listening for said messages
+func (em *Emitter) Unsubscribe(ctx context.Context, subscriber string, queryable query.Queryable) error {
+	pubsubQuery, err := queryable.Query()
 	if err != nil {
 		return nil
 	}
 	return em.pubsubServer.Unsubscribe(ctx, subscriber, pubsubQuery)
 }
 
-func (em *emitter) UnsubscribeAll(ctx context.Context, subscriber string) error {
+// UnsubscribeAll just stop listening for all messages
+func (em *Emitter) UnsubscribeAll(ctx context.Context, subscriber string) error {
 	return em.pubsubServer.UnsubscribeAll(ctx, subscriber)
 }
 
-// NoOpPublisher
-func NewNoOpPublisher() Publisher {
-	return &noOpPublisher{}
-}
-
-type noOpPublisher struct {
-}
-
-func (nop *noOpPublisher) Publish(ctx context.Context, message interface{}, tags map[string]interface{}) error {
-	return nil
-}
-
-// **************************************************************************************
+// ***************
 // Helper function
 
-func GenerateSubscriptionID() (string, error) {
-	b := make([]byte, 32)
-	_, err := rand.Read(b)
-	if err != nil {
-		return "", fmt.Errorf("could not generate random bytes for a subscription"+
-			" id: %v", err)
-	}
-	rStr := hex.EncodeToString(b)
-	return strings.ToUpper(rStr), nil
+func GenSubID() string {
+	bs := make([]byte, 32)
+	rand.Read(bs)
+	return hex.EncodeUpperToString(bs)
 }

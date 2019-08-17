@@ -19,28 +19,40 @@ import (
 
 	"bytes"
 
-	acm "github.com/hyperledger/burrow/account"
+	"github.com/hyperledger/burrow/acm"
+	"github.com/hyperledger/burrow/acm/acmstate"
 	. "github.com/hyperledger/burrow/binary"
+	"github.com/hyperledger/burrow/crypto"
 )
 
 type FakeAppState struct {
-	accounts map[acm.Address]acm.Account
-	storage  map[string]Word256
+	accounts map[crypto.Address]*acm.Account
+	storage  map[string][]byte
+	metadata map[acmstate.MetadataHash]string
 }
 
-var _ acm.StateWriter = &FakeAppState{}
+var _ acmstate.ReaderWriter = &FakeAppState{}
 
-func (fas *FakeAppState) GetAccount(addr acm.Address) (acm.Account, error) {
+func (fas *FakeAppState) GetAccount(addr crypto.Address) (*acm.Account, error) {
 	account := fas.accounts[addr]
 	return account, nil
 }
 
-func (fas *FakeAppState) UpdateAccount(account acm.Account) error {
-	fas.accounts[account.Address()] = account
+func (fas *FakeAppState) GetMetadata(metahash acmstate.MetadataHash) (string, error) {
+	return fas.metadata[metahash], nil
+}
+
+func (fas *FakeAppState) SetMetadata(metahash acmstate.MetadataHash, metadata string) error {
+	fas.metadata[metahash] = metadata
 	return nil
 }
 
-func (fas *FakeAppState) RemoveAccount(address acm.Address) error {
+func (fas *FakeAppState) UpdateAccount(account *acm.Account) error {
+	fas.accounts[account.GetAddress()] = account
+	return nil
+}
+
+func (fas *FakeAppState) RemoveAccount(address crypto.Address) error {
 	_, ok := fas.accounts[address]
 	if !ok {
 		panic(fmt.Sprintf("Invalid account addr: %s", address))
@@ -51,7 +63,7 @@ func (fas *FakeAppState) RemoveAccount(address acm.Address) error {
 	return nil
 }
 
-func (fas *FakeAppState) GetStorage(addr acm.Address, key Word256) (Word256, error) {
+func (fas *FakeAppState) GetStorage(addr crypto.Address, key Word256) ([]byte, error) {
 	_, ok := fas.accounts[addr]
 	if !ok {
 		panic(fmt.Sprintf("Invalid account addr: %s", addr))
@@ -61,11 +73,11 @@ func (fas *FakeAppState) GetStorage(addr acm.Address, key Word256) (Word256, err
 	if ok {
 		return value, nil
 	} else {
-		return Zero256, nil
+		return []byte{}, nil
 	}
 }
 
-func (fas *FakeAppState) SetStorage(addr acm.Address, key Word256, value Word256) error {
+func (fas *FakeAppState) SetStorage(addr crypto.Address, key Word256, value []byte) error {
 	_, ok := fas.accounts[addr]
 	if !ok {
 
@@ -81,7 +93,7 @@ func (fas *FakeAppState) accountsDump() string {
 	buf := new(bytes.Buffer)
 	fmt.Fprint(buf, "Dumping accounts...", "\n")
 	for _, acc := range fas.accounts {
-		fmt.Fprint(buf, acc.Address().String(), "\n")
+		fmt.Fprint(buf, acc.GetAddress().String(), "\n")
 	}
 	return buf.String()
 }

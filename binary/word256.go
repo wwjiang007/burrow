@@ -16,8 +16,12 @@ package binary
 
 import (
 	"bytes"
+	"encoding/binary"
+	"fmt"
 	"math/big"
 	"sort"
+
+	hex "github.com/tmthrgd/go-hex"
 )
 
 var (
@@ -32,6 +36,19 @@ var BigWord256Length = big.NewInt(Word256Length)
 var trimCutSet = string([]byte{0})
 
 type Word256 [Word256Length]byte
+
+func (w *Word256) UnmarshalText(hexBytes []byte) error {
+	bs, err := hex.DecodeString(string(hexBytes))
+	if err != nil {
+		return err
+	}
+	copy(w[:], bs)
+	return nil
+}
+
+func (w Word256) MarshalText() ([]byte, error) {
+	return []byte(hex.EncodeUpperToString(w[:])), nil
+}
 
 func (w Word256) String() string {
 	return string(w[:])
@@ -80,16 +97,45 @@ func (w Word256) UnpadRight() []byte {
 	return bytes.TrimRight(w[:], trimCutSet)
 }
 
-func Uint64ToWord256(i uint64) Word256 {
-	buf := [8]byte{}
-	PutUint64BE(buf[:], i)
-	return LeftPadWord256(buf[:])
+// Gogo proto support
+func (w *Word256) Marshal() ([]byte, error) {
+	if w == nil {
+		return nil, nil
+	}
+	return w.Bytes(), nil
 }
 
-func Int64ToWord256(i int64) Word256 {
-	buf := [8]byte{}
-	PutInt64BE(buf[:], i)
-	return LeftPadWord256(buf[:])
+func (w *Word256) Unmarshal(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if len(data) != Word256Length {
+		return fmt.Errorf("error unmarshallling Word256 '%X' from bytes: %d bytes but should have %d bytes",
+			data, len(data), Word256Length)
+	}
+	copy(w[:], data)
+	return nil
+}
+
+func (w *Word256) MarshalTo(data []byte) (int, error) {
+	if w == nil {
+		return 0, nil
+	}
+	return copy(data, w[:]), nil
+}
+
+func (w Word256) Size() int {
+	return Word256Length
+}
+
+func Uint64ToWord256(i uint64) (word Word256) {
+	binary.BigEndian.PutUint64(word[24:], i)
+	return
+}
+
+func Int64ToWord256(i int64) (word Word256) {
+	binary.BigEndian.PutUint64(word[24:], uint64(i))
+	return
 }
 
 func RightPadWord256(bz []byte) (word Word256) {
@@ -103,16 +149,28 @@ func LeftPadWord256(bz []byte) (word Word256) {
 }
 
 func Uint64FromWord256(word Word256) uint64 {
-	buf := word.Postfix(8)
-	return GetUint64BE(buf)
+	return binary.BigEndian.Uint64(word.Postfix(8))
 }
 
 func Int64FromWord256(word Word256) int64 {
-	buf := word.Postfix(8)
-	return GetInt64BE(buf)
+	return int64(Uint64FromWord256(word))
 }
 
 //-------------------------------------
+
+type Words256 []Word256
+
+func (ws Words256) Len() int {
+	return len(ws)
+}
+
+func (ws Words256) Less(i, j int) bool {
+	return ws[i].Compare(ws[j]) < 0
+}
+
+func (ws Words256) Swap(i, j int) {
+	ws[i], ws[j] = ws[j], ws[i]
+}
 
 type Tuple256 struct {
 	First  Word256

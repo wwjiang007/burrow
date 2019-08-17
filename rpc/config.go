@@ -1,34 +1,70 @@
 package rpc
 
-import "github.com/hyperledger/burrow/rpc/v0/server"
+// 'LocalHost' gets interpreted as ipv6
+// TODO: revisit this
+const LocalHost = "127.0.0.1"
+const AnyLocal = "0.0.0.0"
 
 type RPCConfig struct {
-	V0 *V0Config `json:",omitempty" toml:",omitempty"`
-	TM *TMConfig `json:",omitempty" toml:",omitempty"`
+	Info     *ServerConfig  `json:",omitempty" toml:",omitempty"`
+	Profiler *ServerConfig  `json:",omitempty" toml:",omitempty"`
+	GRPC     *ServerConfig  `json:",omitempty" toml:",omitempty"`
+	Metrics  *MetricsConfig `json:",omitempty" toml:",omitempty"`
 }
 
-type TMConfig struct {
-	ListenAddress string
+type ServerConfig struct {
+	Enabled    bool
+	ListenHost string
+	ListenPort string
 }
 
-type V0Config struct {
-	Server *server.ServerConfig
+type MetricsConfig struct {
+	ServerConfig
+	MetricsPath     string
+	BlockSampleSize int
 }
 
 func DefaultRPCConfig() *RPCConfig {
 	return &RPCConfig{
-		TM: DefaultTMConfig(),
-		V0: DefaultV0Config(),
-	}
-}
-func DefaultV0Config() *V0Config {
-	return &V0Config{
-		Server: server.DefaultServerConfig(),
+		Info:     DefaultInfoConfig(),
+		Profiler: DefaultProfilerConfig(),
+		GRPC:     DefaultGRPCConfig(),
+		Metrics:  DefaultMetricsConfig(),
 	}
 }
 
-func DefaultTMConfig() *TMConfig {
-	return &TMConfig{
-		ListenAddress: ":46657",
+func DefaultInfoConfig() *ServerConfig {
+	return &ServerConfig{
+		Enabled:    true,
+		ListenHost: AnyLocal,
+		ListenPort: "26658",
+	}
+}
+
+func DefaultGRPCConfig() *ServerConfig {
+	return &ServerConfig{
+		Enabled:    true,
+		ListenHost: AnyLocal,
+		ListenPort: "10997",
+	}
+}
+
+func DefaultProfilerConfig() *ServerConfig {
+	return &ServerConfig{
+		Enabled:    false,
+		ListenHost: AnyLocal,
+		ListenPort: "6060",
+	}
+}
+
+func DefaultMetricsConfig() *MetricsConfig {
+	return &MetricsConfig{
+		ServerConfig: ServerConfig{
+			Enabled:    false,
+			ListenHost: AnyLocal,
+			ListenPort: "9102",
+		},
+		MetricsPath:     "/metrics",
+		BlockSampleSize: 100,
 	}
 }

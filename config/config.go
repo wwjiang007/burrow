@@ -3,61 +3,55 @@ package config
 import (
 	"fmt"
 
-	"context"
-
-	acm "github.com/hyperledger/burrow/account"
 	"github.com/hyperledger/burrow/config/source"
 	"github.com/hyperledger/burrow/consensus/tendermint"
-	"github.com/hyperledger/burrow/consensus/tendermint/validator"
-	"github.com/hyperledger/burrow/core"
+	"github.com/hyperledger/burrow/crypto"
+	"github.com/hyperledger/burrow/execution"
 	"github.com/hyperledger/burrow/genesis"
 	"github.com/hyperledger/burrow/keys"
-	logging_config "github.com/hyperledger/burrow/logging/config"
-	"github.com/hyperledger/burrow/logging/lifecycle"
+	"github.com/hyperledger/burrow/logging/logconfig"
 	"github.com/hyperledger/burrow/rpc"
+	tmConfig "github.com/tendermint/tendermint/config"
 )
 
 const DefaultBurrowConfigTOMLFileName = "burrow.toml"
-const DefaultBurrowConfigJSONEnvironmentVariable = "BURROW_CONFIG_JSON"
+const DefaultBurrowConfigEnvironmentVariable = "BURROW_CONFIG_JSON"
 const DefaultGenesisDocJSONFileName = "genesis.json"
 
 type BurrowConfig struct {
-	ValidatorAddress *acm.Address                       `json:",omitempty" toml:",omitempty"`
-	GenesisDoc       *genesis.GenesisDoc                `json:",omitempty" toml:",omitempty"`
-	Tendermint       *tendermint.BurrowTendermintConfig `json:",omitempty" toml:",omitempty"`
-	Keys             *keys.KeysConfig                   `json:",omitempty" toml:",omitempty"`
-	RPC              *rpc.RPCConfig                     `json:",omitempty" toml:",omitempty"`
-	Logging          *logging_config.LoggingConfig      `json:",omitempty" toml:",omitempty"`
+	// Set on startup
+	Address    *crypto.Address `json:",omitempty" toml:",omitempty"`
+	Passphrase *string         `json:",omitempty" toml:",omitempty"`
+	// From config file
+	BurrowDir  string
+	GenesisDoc *genesis.GenesisDoc                `json:",omitempty" toml:",omitempty"`
+	Tendermint *tendermint.BurrowTendermintConfig `json:",omitempty" toml:",omitempty"`
+	Execution  *execution.ExecutionConfig         `json:",omitempty" toml:",omitempty"`
+	Keys       *keys.KeysConfig                   `json:",omitempty" toml:",omitempty"`
+	RPC        *rpc.RPCConfig                     `json:",omitempty" toml:",omitempty"`
+	Logging    *logconfig.LoggingConfig           `json:",omitempty" toml:",omitempty"`
 }
 
 func DefaultBurrowConfig() *BurrowConfig {
 	return &BurrowConfig{
+		BurrowDir:  ".burrow",
 		Tendermint: tendermint.DefaultBurrowTendermintConfig(),
 		Keys:       keys.DefaultKeysConfig(),
 		RPC:        rpc.DefaultRPCConfig(),
-		Logging:    logging_config.DefaultNodeLoggingConfig(),
+		Execution:  execution.DefaultExecutionConfig(),
+		Logging:    logconfig.DefaultNodeLoggingConfig(),
 	}
 }
 
-func (conf *BurrowConfig) Kernel(ctx context.Context) (*core.Kernel, error) {
-	if conf.GenesisDoc == nil {
-		return nil, fmt.Errorf("no GenesisDoc defined in config, cannot make Kernel")
+func (conf *BurrowConfig) Verify() error {
+	if conf.Address == nil {
+		return fmt.Errorf("could not finalise address - please provide one in config or via --account-address")
 	}
-	if conf.ValidatorAddress == nil {
-		return nil, fmt.Errorf("no validator address in config, cannot make Kernel")
-	}
-	logger, err := lifecycle.NewLoggerFromLoggingConfig(conf.Logging)
-	if err != nil {
-		return nil, fmt.Errorf("could not generate logger from logging config: %v", err)
-	}
-	keyClient := keys.NewKeyClient(conf.Keys.URL, logger)
-	val, err := keys.Addressable(keyClient, *conf.ValidatorAddress)
-	if err != nil {
-		return nil, fmt.Errorf("could not get validator addressable from keys client: %v", err)
-	}
-	privValidator := validator.NewPrivValidatorMemory(val, keys.Signer(keyClient, val.Address()))
+	return nil
+}
 
-	return core.NewKernel(ctx, privValidator, conf.GenesisDoc, conf.Tendermint.TendermintConfig(), conf.RPC, logger)
+func (conf *BurrowConfig) TendermintConfig() (*tmConfig.Config, error) {
+	return conf.Tendermint.Config(conf.BurrowDir, conf.Execution.TimeoutFactor)
 }
 
 func (conf *BurrowConfig) JSONString() string {

@@ -15,18 +15,16 @@
 package evm
 
 import (
-	"bytes"
-	"context"
-	"reflect"
 	"testing"
-	"time"
 
-	acm "github.com/hyperledger/burrow/account"
+	"bytes"
+	"reflect"
+
+	"github.com/hyperledger/burrow/acm"
 	. "github.com/hyperledger/burrow/binary"
-	"github.com/hyperledger/burrow/event"
+	"github.com/hyperledger/burrow/crypto"
 	. "github.com/hyperledger/burrow/execution/evm/asm"
-	"github.com/hyperledger/burrow/execution/evm/events"
-	"github.com/hyperledger/burrow/logging/loggers"
+	"github.com/hyperledger/burrow/execution/exec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,27 +38,21 @@ var expectedTopics = []Word256{
 
 // Tests logs and events.
 func TestLog4(t *testing.T) {
-
 	st := newAppState()
+	cache := NewState(st, blockHashGetter)
 	// Create accounts
-	account1 := acm.ConcreteAccount{
-		Address: acm.Address{1, 3, 5, 7, 9},
-	}.MutableAccount()
-	account2 := acm.ConcreteAccount{
-		Address: acm.Address{2, 4, 6, 8, 10},
-	}.MutableAccount()
-	st.accounts[account1.Address()] = account1
-	st.accounts[account2.Address()] = account2
+	account1 := &acm.Account{
+		Address: crypto.Address{1, 3, 5, 7, 9},
+	}
+	account2 := &acm.Account{
+		Address: crypto.Address{2, 4, 6, 8, 10},
+	}
+	st.accounts[account1.Address] = account1
+	st.accounts[account2.Address] = account2
 
-	ourVm := NewVM(st, DefaultDynamicMemoryProvider, newParams(), acm.ZeroAddress, nil, logger)
+	ourVm := NewVM(newParams(), crypto.ZeroAddress, nil, logger)
 
-	emitter := event.NewEmitter(loggers.NewNoopInfoTraceLogger())
-
-	ch := make(chan *events.EventDataLog)
-
-	require.NoError(t, events.SubscribeLogEvent(context.Background(), emitter, "test", account2.Address(), ch))
-
-	ourVm.SetPublisher(emitter)
+	txe := new(exec.TxExecution)
 
 	var gas uint64 = 100000
 
@@ -83,20 +75,22 @@ func TestLog4(t *testing.T) {
 		stop,
 	}
 
-	_, err := ourVm.Call(account1, account2, code, []byte{}, 0, &gas)
+	_, err := ourVm.Call(cache, txe, account1.Address, account2.Address, code, []byte{}, 0, &gas)
 	require.NoError(t, err)
-	select {
-	case <-time.After(5 * time.Second):
-		t.Fatalf("timedout waiting for EventDataLog")
-	case eventDataLog := <-ch:
-		if !reflect.DeepEqual(eventDataLog.Topics, expectedTopics) {
-			t.Errorf("Event topics are wrong. Got: %v. Expected: %v", eventDataLog.Topics, expectedTopics)
-		}
-		if !bytes.Equal(eventDataLog.Data, expectedData) {
-			t.Errorf("Event data is wrong. Got: %s. Expected: %s", eventDataLog.Data, expectedData)
-		}
-		if eventDataLog.Height != expectedHeight {
-			t.Errorf("Event block height is wrong. Got: %d. Expected: %d", eventDataLog.Height, expectedHeight)
+
+	for _, ev := range txe.Events {
+		if ev.Log != nil {
+			if !reflect.DeepEqual(ev.Log.Topics, expectedTopics) {
+				t.Errorf("Event topics are wrong. Got: %v. Expected: %v", ev.Log.Topics, expectedTopics)
+			}
+			if !bytes.Equal(ev.Log.Data, expectedData) {
+				t.Errorf("Event data is wrong. Got: %s. Expected: %s", ev.Log.Data, expectedData)
+			}
+			if ev.Header.Height != expectedHeight {
+				t.Errorf("Event block height is wrong. Got: %d. Expected: %d", ev.Header.Height, expectedHeight)
+			}
+			return
 		}
 	}
+	t.Fatalf("Did not see LogEvent")
 }

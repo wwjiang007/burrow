@@ -3,7 +3,6 @@ package permission
 import (
 	"testing"
 
-	"github.com/hyperledger/burrow/permission/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,27 +25,25 @@ func TestBasePermissionsFromStringList(t *testing.T) {
 }
 
 func TestBasePermissionsToStringList(t *testing.T) {
-	permStrings, err := BasePermissionsToStringList(allSetBasePermission(Root | HasRole | SetBase | Call))
-	require.NoError(t, err)
+	permStrings := BasePermissionsToStringList(allSetBasePermission(Root | HasRole | SetBase | Call))
 	assert.Equal(t, []string{"root", "call", "setBase", "hasRole"}, permStrings)
 
-	permStrings, err = BasePermissionsToStringList(allSetBasePermission(AllPermFlags))
-	require.NoError(t, err)
-	assert.Equal(t, []string{"root", "send", "call", "createContract", "createAccount", "bond", "name", "hasBase",
+	permStrings = BasePermissionsToStringList(allSetBasePermission(AllPermFlags))
+	assert.Equal(t, []string{"root", "send", "call", "createContract", "createAccount", "bond", "name", "proposal", "input", "batch", "hasBase",
 		"setBase", "unsetBase", "setGlobal", "hasRole", "addRole", "removeRole"}, permStrings)
 
-	permStrings, err = BasePermissionsToStringList(allSetBasePermission(AllPermFlags + 1))
-	assert.Error(t, err)
+	permStrings = BasePermissionsToStringList(allSetBasePermission(AllPermFlags + 1))
+	assert.Equal(t, []string{}, permStrings)
 }
 
 func TestBasePermissionsString(t *testing.T) {
 	permissionString := BasePermissionsString(allSetBasePermission(AllPermFlags &^ Root))
-	assert.Equal(t, "send | call | createContract | createAccount | bond | name | hasBase | "+
+	assert.Equal(t, "send | call | createContract | createAccount | bond | name | proposal | input | batch | hasBase | "+
 		"setBase | unsetBase | setGlobal | hasRole | addRole | removeRole", permissionString)
 }
 
-func allSetBasePermission(perms types.PermFlag) types.BasePermissions {
-	return types.BasePermissions{
+func allSetBasePermission(perms PermFlag) BasePermissions {
+	return BasePermissions{
 		Perms:  perms,
 		SetBit: perms,
 	}

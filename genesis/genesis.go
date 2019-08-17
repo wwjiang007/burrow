@@ -21,9 +21,12 @@ import (
 	"sort"
 	"time"
 
-	acm "github.com/hyperledger/burrow/account"
+	"github.com/hyperledger/burrow/binary"
+
+	"github.com/hyperledger/burrow/acm"
+	"github.com/hyperledger/burrow/acm/validator"
+	"github.com/hyperledger/burrow/crypto"
 	"github.com/hyperledger/burrow/permission"
-	ptypes "github.com/hyperledger/burrow/permission/types"
 )
 
 // How many bytes to take from the front of the GenesisDoc hash to append
@@ -35,16 +38,16 @@ const ShortHashSuffixBytes = 3
 // core types for a genesis definition
 
 type BasicAccount struct {
-	// Address  is convenient to have in file for reference, but otherwise ignored since derived from PublicKey
-	Address   acm.Address
-	PublicKey acm.PublicKey
+	// Address is convenient to have in file for reference, but otherwise ignored since derived from PublicKey
+	Address   crypto.Address
+	PublicKey crypto.PublicKey
 	Amount    uint64
 }
 
 type Account struct {
 	BasicAccount
 	Name        string
-	Permissions ptypes.AccountPermissions
+	Permissions permission.AccountPermissions
 }
 
 type Validator struct {
@@ -53,26 +56,63 @@ type Validator struct {
 	UnbondTo []BasicAccount
 }
 
-//------------------------------------------------------------
-// GenesisDoc is stored in the state database
+const DefaultProposalThreshold uint64 = 3
+
+var DefaultPermissionsAccount = PermissionsAccount(permission.DefaultAccountPermissions)
+
+type params struct {
+	ProposalThreshold uint64
+}
 
 type GenesisDoc struct {
 	GenesisTime       time.Time
 	ChainName         string
-	Salt              []byte `json:",omitempty"`
-	GlobalPermissions ptypes.AccountPermissions
+	AppHash           binary.HexBytes `json:",omitempty" toml:",omitempty"`
+	Params            params          `json:",omitempty" toml:",omitempty"`
+	Salt              []byte          `json:",omitempty" toml:",omitempty"`
+	GlobalPermissions permission.AccountPermissions
 	Accounts          []Account
 	Validators        []Validator
+	// memo
+	hash    []byte
+	chainID string
 }
 
-// JSONBytes returns the JSON (not-yet) canonical bytes for a given
-// GenesisDoc or an error.
+func (genesisDoc *GenesisDoc) GlobalPermissionsAccount() *acm.Account {
+	return PermissionsAccount(genesisDoc.GlobalPermissions)
+}
+
+func PermissionsAccount(globalPerms permission.AccountPermissions) *acm.Account {
+	// Ensure the set bits are all true otherwise the HasPermission() functions will fail
+	globalPerms.Base.SetBit = permission.AllPermFlags
+
+	return &acm.Account{
+		Address:     acm.GlobalPermissionsAddress,
+		Balance:     1337,
+		Permissions: globalPerms,
+	}
+}
+
+func (genesisDoc *GenesisDoc) JSONString() string {
+	bs, err := genesisDoc.JSONBytes()
+	if err != nil {
+		return fmt.Sprintf("error marshalling GenesisDoc: %v", err)
+	}
+	return string(bs)
+}
+
+// JSONBytes returns the JSON canonical bytes for a given GenesisDoc or an error.
 func (genesisDoc *GenesisDoc) JSONBytes() ([]byte, error) {
-	// TODO: write JSON in canonical order
+	// Just in case
+	genesisDoc.GenesisTime = genesisDoc.GenesisTime.UTC()
 	return json.MarshalIndent(genesisDoc, "", "\t")
 }
 
 func (genesisDoc *GenesisDoc) Hash() []byte {
+	if genesisDoc.hash != nil {
+		return genesisDoc.hash
+	}
+
 	genesisDocBytes, err := genesisDoc.JSONBytes()
 	if err != nil {
 		panic(fmt.Errorf("could not create hash of GenesisDoc: %v", err))
@@ -87,7 +127,10 @@ func (genesisDoc *GenesisDoc) ShortHash() []byte {
 }
 
 func (genesisDoc *GenesisDoc) ChainID() string {
-	return fmt.Sprintf("%s-%X", genesisDoc.ChainName, genesisDoc.ShortHash())
+	if genesisDoc.chainID == "" {
+		genesisDoc.chainID = fmt.Sprintf("%s-%X", genesisDoc.ChainName, genesisDoc.ShortHash())
+	}
+	return genesisDoc.chainID
 }
 
 //------------------------------------------------------------
@@ -99,19 +142,24 @@ func GenesisDocFromJSON(jsonBlob []byte) (*GenesisDoc, error) {
 	if err != nil {
 		return nil, fmt.Errorf("couldn't read GenesisDoc: %v", err)
 	}
+	if len(genDoc.AppHash) != 0 {
+		genDoc.hash = genDoc.AppHash
+	}
+
 	return genDoc, nil
+
 }
 
 //------------------------------------------------------------
 // Account methods
 
-func GenesisAccountFromAccount(name string, account acm.Account) Account {
+func GenesisAccountFromAccount(name string, account *acm.Account) Account {
 	return Account{
 		Name:        name,
-		Permissions: account.Permissions(),
+		Permissions: account.Permissions,
 		BasicAccount: BasicAccount{
-			Address: account.Address(),
-			Amount:  account.Balance(),
+			Address: account.Address,
+			Amount:  account.Balance,
 		},
 	}
 }
@@ -129,15 +177,25 @@ func (genesisAccount *Account) Clone() Account {
 	}
 }
 
+func (genesisAccount *Account) AcmAccount() *acm.Account {
+	return &acm.Account{
+		Address:     genesisAccount.Address,
+		PublicKey:   genesisAccount.PublicKey,
+		Balance:     genesisAccount.Amount,
+		Permissions: genesisAccount.Permissions,
+	}
+}
+
 //------------------------------------------------------------
 // Validator methods
 
-func (gv *Validator) Validator() acm.Validator {
-	return acm.ConcreteValidator{
-		Address:   gv.PublicKey.Address(),
+func (gv *Validator) Validator() validator.Validator {
+	address := gv.PublicKey.GetAddress()
+	return validator.Validator{
+		Address:   &address,
 		PublicKey: gv.PublicKey,
 		Power:     uint64(gv.Amount),
-	}.Validator()
+	}
 }
 
 // Clone clones the genesis validator
@@ -172,8 +230,8 @@ func (basicAccount *BasicAccount) Clone() BasicAccount {
 // and a slice of pointers to Validator to construct a GenesisDoc, or returns an error on
 // failure.  In particular MakeGenesisDocFromAccount uses the local time as a
 // timestamp for the GenesisDoc.
-func MakeGenesisDocFromAccounts(chainName string, salt []byte, genesisTime time.Time, accounts map[string]acm.Account,
-	validators map[string]acm.Validator) *GenesisDoc {
+func MakeGenesisDocFromAccounts(chainName string, salt []byte, genesisTime time.Time, accounts map[string]*acm.Account,
+	validators map[string]*validator.Validator) *GenesisDoc {
 
 	// Establish deterministic order of accounts by name so we obtain identical GenesisDoc
 	// from identical input
@@ -200,15 +258,15 @@ func MakeGenesisDocFromAccounts(chainName string, salt []byte, genesisTime time.
 		genesisValidators = append(genesisValidators, Validator{
 			Name: name,
 			BasicAccount: BasicAccount{
-				Address:   val.Address(),
-				PublicKey: val.PublicKey(),
-				Amount:    val.Power(),
+				Address:   *val.Address,
+				PublicKey: val.PublicKey,
+				Amount:    val.Power,
 			},
 			// Simpler to just do this by convention
 			UnbondTo: []BasicAccount{
 				{
-					Amount:  val.Power(),
-					Address: val.Address(),
+					Amount:  val.Power,
+					Address: *val.Address,
 				},
 			},
 		})

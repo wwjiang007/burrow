@@ -17,6 +17,8 @@ package structure
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/go-kit/kit/log"
 )
 
 const (
@@ -34,10 +36,14 @@ const (
 	MessageKey = "message"
 	// Error key
 	ErrorKey = "error"
+	// Tx hash key
+	TxHashKey = "tx_hash"
 	// Captured logging source (like tendermint_log15, stdlib_log)
 	CapturedLoggingSourceKey = "captured_logging_source"
 	// Top-level component (choose one) name
 	ComponentKey = "component"
+	// Tendermint component etc
+	Tendermint = "tendermint"
 	// Vector-valued scope
 	ScopeKey = "scope"
 	// Globally unique identifier persisting while a single instance (root process)
@@ -46,7 +52,10 @@ const (
 	// Provides special instructions (that may be ignored) to downstream loggers
 	SignalKey = "__signal__"
 	// The sync signal instructs sync-able loggers to sync
-	SyncSignal = "__sync__"
+	SyncSignal       = "__sync__"
+	ReloadSignal     = "__reload__"
+	InfoChannelName  = "Info"
+	TraceChannelName = "Trace"
 )
 
 // Pull the specified values from a structured log line into a map.
@@ -103,7 +112,18 @@ func RemoveKeys(keyvals []interface{}, dropKeys ...interface{}) []interface{} {
 	})
 }
 
-// Drops all key value pairs where the key is in keys
+func OnlyKeys(keyvals []interface{}, includeKeys ...interface{}) []interface{} {
+	return DropKeys(keyvals, func(key, value interface{}) bool {
+		for _, includeKey := range includeKeys {
+			if key == includeKey {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// Drops all key value pairs where dropKeyValPredicate is true
 func DropKeys(keyvals []interface{}, dropKeyValPredicate func(key, value interface{}) bool) []interface{} {
 	keyvalsDropped := make([]interface{}, 0, len(keyvals))
 	for i := 0; i < 2*(len(keyvals)/2); i += 2 {
@@ -196,14 +216,27 @@ func Value(keyvals []interface{}, key interface{}) interface{} {
 }
 
 // Maps key values pairs with a function (key, value) -> (new key, new value)
-func MapKeyValues(keyvals []interface{}, fn func(interface{}, interface{}) (interface{}, interface{})) []interface{} {
-	mappedKeyvals := make([]interface{}, len(keyvals))
-	for i := 0; i < 2*(len(keyvals)/2); i += 2 {
-		key := keyvals[i]
-		val := keyvals[i+1]
-		mappedKeyvals[i], mappedKeyvals[i+1] = fn(key, val)
+func MapKeyValues(keyvals []interface{}, fn func(interface{}, interface{}) (interface{}, interface{})) ([]interface{}, error) {
+	mappedKeyvals := make([]interface{}, 0)
+	for i := 0; i < len(keyvals); {
+		keymap, ok := keyvals[i].(map[string]interface{})
+		if ok {
+			for key, val := range keymap {
+				k, v := fn(key, val)
+				mappedKeyvals = append(mappedKeyvals, k, v)
+			}
+			i++
+		} else {
+			if i+1 >= len(keyvals) {
+				return nil, fmt.Errorf("log line contains an odd number of elements so "+
+					"was dropped: %v", keyvals)
+			}
+			k, v := fn(keyvals[i], keyvals[i+1])
+			mappedKeyvals = append(mappedKeyvals, k, v)
+			i += 2
+		}
 	}
-	return mappedKeyvals
+	return mappedKeyvals, nil
 }
 
 // Deletes n elements starting with the ith from a slice by splicing.
@@ -215,19 +248,6 @@ func Delete(slice []interface{}, i int, n int) []interface{} {
 // Delete an element at a specific index and return the contracted list
 func DeleteAt(slice []interface{}, i int) []interface{} {
 	return Delete(slice, i, 1)
-}
-
-// Prepend elements to slice in the order they appear
-func CopyPrepend(slice []interface{}, elements ...interface{}) []interface{} {
-	elementsLength := len(elements)
-	newSlice := make([]interface{}, len(slice)+elementsLength)
-	for i, e := range elements {
-		newSlice[i] = e
-	}
-	for i, e := range slice {
-		newSlice[elementsLength+i] = e
-	}
-	return newSlice
 }
 
 // Provides a canonical way to stringify keys
@@ -243,7 +263,31 @@ func StringifyKey(key interface{}) string {
 		case fmt.Stringer:
 			return k.String()
 		default:
-			return fmt.Sprintf("%v", key)
+			return fmt.Sprint(key)
 		}
 	}
+}
+
+// Sends the sync signal which causes any syncing loggers to sync.
+// loggers receiving the signal should drop the signal logline from output
+func Sync(logger log.Logger) error {
+	return logger.Log(SignalKey, SyncSignal)
+}
+
+func Reload(logger log.Logger) error {
+	return logger.Log(SignalKey, ReloadSignal)
+}
+
+// Tried to interpret the logline as a signal by matching the last key-value pair as a signal,
+// returns empty string if no match. The idea with signals is that the should be transmitted to a root logger
+// as a single key-value pair so we avoid the need to do a linear probe over every log line in order to detect a signal.
+func Signal(keyvals []interface{}) string {
+	last := len(keyvals) - 1
+	if last > 0 && keyvals[last-1] == SignalKey {
+		signal, ok := keyvals[last].(string)
+		if ok {
+			return signal
+		}
+	}
+	return ""
 }

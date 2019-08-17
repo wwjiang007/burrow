@@ -4,44 +4,57 @@
 defaults: &defaults
   working_directory: /go/src/github.com/hyperledger/burrow
   docker:
-    - image: circleci/golang:1.9.3
+    - image: hyperledger/burrow:ci
+  environment:
+    - GO_TEST_ARGS: -p 2
 
 tag_filters: &tags_filters
   tags:
     only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
 
 setup_docker: &setup_docker
-  version: 17.06.1-ce
+  version: 17.11.0-ce
 
-# Start of CircleCI 2.0 config
-version: 2
+orbs:
+  codecov: codecov/codecov@1.0.4
+
+version: 2.1
 jobs:
+
   test:
     <<: *defaults
     steps:
+      - run: echo $CIRCLE_PULL_REQUESTS
+      - run: echo $CIRCLE_BRANCH
       - checkout
       - run: make test
       # In case we miss compile errors not pulled into test paths
       - run: make build
 
+  test_cover:
+    <<: *defaults
+    steps:
+      - checkout
+      - run: make test_cover
+      - codecov/upload:
+          file: coverage.html
+
+  test_js:
+    machine:
+      image: circleci/classic:201808-01
+    steps:
+      - checkout
+      # js tests do not need to in docker, however nodejs crashes
+      # while running mocha when not using image above (not OOM).
+      # above image needs newer go so docker is used.
+      - run: docker-compose run burrow make npm_install test_js
+
   test_integration:
-    <<: *defaults
+    machine:
+      image: circleci/classic:201808-01
     steps:
       - checkout
-      - run: sudo apt-get install libgmp3-dev
-      - run: make test_integration
-
-  test_integration_bosmarmot:
-    <<: *defaults
-    steps:
-      - checkout
-      - run: make test_integration_bosmarmot
-
-  ensure_vendor:
-    <<: *defaults
-    steps:
-      - checkout
-      - run: make ensure_vendor
+      - run: docker-compose run burrow make test_integration_no_postgres
 
   build_docker:
     <<: *defaults
@@ -51,38 +64,26 @@ jobs:
       - setup_remote_docker:
           <<: *setup_docker
         # build docker image and tag the docker image(s) depending on branch/tag
-      - run: make build_docker_db
-      - run: docker save quay.io/monax/db > db-images.tar
-      - persist_to_workspace:
-          root: .
-          paths:
-            - .
+      - run: make docker_build
 
-  # Simple smoke test to ensure burrow binary has been provisioned to container
-  test_docker_smoke:
+  release_dev:
     <<: *defaults
     steps:
-      - attach_workspace:
-          at: .
       - setup_remote_docker:
           <<: *setup_docker
-      - run: docker load -i db-images.tar
-      - run: docker run quay.io/monax/db:$(./scripts/local_version.sh) burrow -h
+      - checkout
+      - run: make release_dev
 
-  push_docker:
+  release:
     <<: *defaults
     steps:
-      - attach_workspace:
-          at: .
       - setup_remote_docker:
           <<: *setup_docker
-      - run: docker login -u $DOCKER_USER -p $DOCKER_PASS quay.io
-      - run: docker load -i db-images.tar
-      - run: docker push quay.io/monax/db
+      - checkout
+      - run: make release
 
 
 workflows:
-  version: 2
 
   test_and_release:
     jobs:
@@ -90,39 +91,41 @@ workflows:
           filters:
             <<: *tags_filters
 
+      - test_cover:
+          filters:
+            branches:
+              only: develop
+
       - test_integration:
           filters:
             <<: *tags_filters
 
-      - test_integration_bosmarmot:
-          filters:
-            <<: *tags_filters
-
-      - ensure_vendor:
+      - test_js:
           filters:
             <<: *tags_filters
 
       - build_docker:
           filters:
-            <<: *tags_filters
-
-      - test_docker_smoke:
-          requires:
-            - build_docker
-          filters:
-            <<: *tags_filters
-
-      - push_docker:
-          requires:
-            - test
-            - test_integration
-            - test_integration_bosmarmot
-            - test_docker_smoke
-          filters:
             # tags filters and branch filters are applied disjunctively, so we
             # will still build tags not on develop (i.e. including tagged
             # releases on master that we specifically want to build)
             <<: *tags_filters
+
+      - release_dev:
+          requires:
+          - test
+          - test_integration
+          - test_js
+          filters:
             branches:
               only: develop
 
+      - release:
+          requires:
+          - test
+          - test_integration
+          - test_js
+          filters:
+            <<: *tags_filters
+            branches:
+              ignore: /.*/

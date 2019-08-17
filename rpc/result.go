@@ -15,76 +15,89 @@
 package rpc
 
 import (
-	"encoding/json"
-	"fmt"
-
-	acm "github.com/hyperledger/burrow/account"
-	"github.com/hyperledger/burrow/execution"
-	exe_events "github.com/hyperledger/burrow/execution/events"
-	evm_events "github.com/hyperledger/burrow/execution/evm/events"
+	"github.com/hyperledger/burrow/acm"
+	"github.com/hyperledger/burrow/acm/validator"
+	"github.com/hyperledger/burrow/binary"
+	"github.com/hyperledger/burrow/consensus/tendermint"
+	"github.com/hyperledger/burrow/crypto"
+	"github.com/hyperledger/burrow/execution/names"
 	"github.com/hyperledger/burrow/genesis"
 	"github.com/hyperledger/burrow/txs"
+	amino "github.com/tendermint/go-amino"
+	"github.com/tendermint/tendermint/consensus"
 	ctypes "github.com/tendermint/tendermint/consensus/types"
-	"github.com/tendermint/tendermint/p2p"
-	tm_types "github.com/tendermint/tendermint/types"
+	core_types "github.com/tendermint/tendermint/rpc/core/types"
+	tmTypes "github.com/tendermint/tendermint/types"
 )
 
-type ResultGetStorage struct {
-	Key   []byte
-	Value []byte
+// When using Tendermint types like Block and Vote we are forced to wrap the outer object and use amino marshalling
+var aminoCodec = NewAminoCodec()
+
+func NewAminoCodec() *amino.Codec {
+	aminoCodec := amino.NewCodec()
+	consensus.RegisterConsensusMessages(aminoCodec)
+	core_types.RegisterAmino(aminoCodec)
+	return aminoCodec
 }
 
-type ResultCall struct {
-	execution.Call
+type ResultStorage struct {
+	Key   binary.HexBytes
+	Value binary.HexBytes
 }
 
-func (rc ResultCall) MarshalJSON() ([]byte, error) {
-	return json.Marshal(rc.Call)
-}
-
-func (rc *ResultCall) UnmarshalJSON(data []byte) (err error) {
-	return json.Unmarshal(data, &rc.Call)
-}
-
-type ResultListAccounts struct {
+type ResultAccounts struct {
 	BlockHeight uint64
-	Accounts    []*acm.ConcreteAccount
+	Accounts    []*acm.Account
 }
 
 type ResultDumpStorage struct {
-	StorageRoot  []byte
 	StorageItems []StorageItem
 }
 
 type StorageItem struct {
-	Key   []byte
-	Value []byte
+	Key   binary.HexBytes
+	Value binary.HexBytes
 }
 
-type ResultListBlocks struct {
+type ResultBlocks struct {
 	LastHeight uint64
-	BlockMetas []*tm_types.BlockMeta
+	BlockMetas []*tmTypes.BlockMeta
 }
 
-type ResultGetBlock struct {
-	BlockMeta *tm_types.BlockMeta
-	Block     *tm_types.Block
+type ResultBlock struct {
+	BlockMeta *BlockMeta
+	Block     *Block
 }
 
-type ResultStatus struct {
-	NodeInfo          *p2p.NodeInfo
-	GenesisHash       []byte
-	PubKey            acm.PublicKey
-	LatestBlockHash   []byte
-	LatestBlockHeight uint64
-	LatestBlockTime   int64
-	NodeVersion       string
+type BlockMeta struct {
+	*tmTypes.BlockMeta
+}
+
+func (bm BlockMeta) MarshalJSON() ([]byte, error) {
+	return aminoCodec.MarshalJSON(bm.BlockMeta)
+}
+
+func (bm *BlockMeta) UnmarshalJSON(data []byte) (err error) {
+	return aminoCodec.UnmarshalJSON(data, &bm.BlockMeta)
+}
+
+// Needed for go-amino handling of interface types
+type Block struct {
+	*tmTypes.Block
+}
+
+func (b Block) MarshalJSON() ([]byte, error) {
+	return aminoCodec.MarshalJSON(b.Block)
+}
+
+func (b *Block) UnmarshalJSON(data []byte) (err error) {
+	return aminoCodec.UnmarshalJSON(data, &b.Block)
 }
 
 type ResultChainId struct {
 	ChainName   string
 	ChainId     string
-	GenesisHash []byte
+	GenesisHash binary.HexBytes
 }
 
 type ResultSubscribe struct {
@@ -96,66 +109,77 @@ type ResultUnsubscribe struct {
 	SubscriptionID string
 }
 
-type Peer struct {
-	NodeInfo   *p2p.NodeInfo
-	IsOutbound bool
+type ResultNetwork struct {
+	ThisNode *tendermint.NodeInfo
+	*core_types.ResultNetInfo
 }
 
-type ResultNetInfo struct {
-	Listening bool
-	Listeners []string
-	Peers     []*Peer
-}
-
-type ResultListValidators struct {
+type ResultValidators struct {
 	BlockHeight         uint64
-	BondedValidators    []*acm.ConcreteValidator
-	UnbondingValidators []*acm.ConcreteValidator
+	BondedValidators    []*validator.Validator
+	UnbondingValidators []*validator.Validator
 }
 
-type ResultDumpConsensusState struct {
-	RoundState      *ctypes.RoundState
-	PeerRoundStates []*ctypes.PeerRoundState
+type ResultConsensusState struct {
+	*core_types.ResultDumpConsensusState
+}
+
+// TODO use round state in ResultConsensusState - currently there are some part of RoundState have no Unmarshal
+type RoundState struct {
+	*ctypes.RoundState
+}
+
+func (rs RoundState) MarshalJSON() ([]byte, error) {
+	return aminoCodec.MarshalJSON(rs.RoundState)
+}
+
+func (rs *RoundState) UnmarshalJSON(data []byte) (err error) {
+	return aminoCodec.UnmarshalJSON(data, &rs.RoundState)
 }
 
 type ResultPeers struct {
-	Peers []*Peer
+	Peers []core_types.Peer
 }
 
-type ResultListNames struct {
+type ResultNames struct {
 	BlockHeight uint64
-	Names       []*execution.NameRegEntry
+	Names       []*names.Entry
 }
 
 type ResultGeneratePrivateAccount struct {
 	PrivateAccount *acm.ConcretePrivateAccount
 }
 
-type ResultGetAccount struct {
-	Account *acm.ConcreteAccount
+type ResultAccount struct {
+	Account *acm.Account
 }
 
-type ResultBroadcastTx struct {
-	txs.Receipt
+type AccountHumanReadable struct {
+	Address     crypto.Address
+	PublicKey   crypto.PublicKey
+	Sequence    uint64
+	Balance     uint64
+	Code        []string
+	Permissions []string
+	Roles       []string
 }
 
-// Unwrap
-
-func (rbt ResultBroadcastTx) MarshalJSON() ([]byte, error) {
-	return json.Marshal(rbt.Receipt)
+type ResultAccountHumanReadable struct {
+	Account *AccountHumanReadable
 }
 
-func (rbt ResultBroadcastTx) UnmarshalJSON(data []byte) (err error) {
-	return json.Unmarshal(data, &rbt.Receipt)
+type ResultAccountStats struct {
+	AccountsWithCode    uint64
+	AccountsWithoutCode uint64
 }
 
-type ResultListUnconfirmedTxs struct {
+type ResultUnconfirmedTxs struct {
 	NumTxs int
-	Txs    []txs.Wrapper
+	Txs    []*txs.Envelope
 }
 
-type ResultGetName struct {
-	Entry *execution.NameRegEntry
+type ResultName struct {
+	Entry *names.Entry
 }
 
 type ResultGenesis struct {
@@ -163,53 +187,5 @@ type ResultGenesis struct {
 }
 
 type ResultSignTx struct {
-	Tx txs.Wrapper
-}
-
-type ResultEvent struct {
-	Event         string
-	TMEventData   *tm_types.TMEventData     `json:",omitempty"`
-	EventDataTx   *exe_events.EventDataTx   `json:",omitempty"`
-	EventDataCall *evm_events.EventDataCall `json:",omitempty"`
-	EventDataLog  *evm_events.EventDataLog  `json:",omitempty"`
-}
-
-func (resultEvent ResultEvent) EventDataNewBlock() *tm_types.EventDataNewBlock {
-	if resultEvent.TMEventData != nil {
-		eventData, _ := resultEvent.TMEventData.Unwrap().(tm_types.EventDataNewBlock)
-		return &eventData
-	}
-	return nil
-}
-
-// Map any supported event data element to our ResultEvent sum type
-func NewResultEvent(event string, eventData interface{}) (*ResultEvent, error) {
-	switch ed := eventData.(type) {
-	case tm_types.TMEventData:
-		return &ResultEvent{
-			Event:       event,
-			TMEventData: &ed,
-		}, nil
-
-	case *exe_events.EventDataTx:
-		return &ResultEvent{
-			Event:       event,
-			EventDataTx: ed,
-		}, nil
-
-	case *evm_events.EventDataCall:
-		return &ResultEvent{
-			Event:         event,
-			EventDataCall: ed,
-		}, nil
-
-	case *evm_events.EventDataLog:
-		return &ResultEvent{
-			Event:        event,
-			EventDataLog: ed,
-		}, nil
-
-	default:
-		return nil, fmt.Errorf("could not map event data of type %T to ResultEvent", eventData)
-	}
+	Tx *txs.Envelope
 }

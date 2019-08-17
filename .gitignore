@@ -5,12 +5,20 @@ bin/
 # tests
 test_scratch/
 *.log
-.burrow
+.keys
+.burrow*
+burrow.toml
+burrow???.toml
 
 # Temporary / cached
 *.swp
-debug
 .idea
 .vscode
 
 .gopath_bos
+
+commit_hash.txt
+
+tests/keys/
+.output.json
+vendor/

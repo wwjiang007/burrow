@@ -17,25 +17,26 @@ package evm
 import (
 	"crypto/sha256"
 
-	acm "github.com/hyperledger/burrow/account"
 	. "github.com/hyperledger/burrow/binary"
-	logging_types "github.com/hyperledger/burrow/logging/types"
+	"github.com/hyperledger/burrow/crypto"
+	"github.com/hyperledger/burrow/execution/errors"
+	"github.com/hyperledger/burrow/logging"
 	"golang.org/x/crypto/ripemd160"
 )
 
-var registeredNativeContracts = make(map[Word256]NativeContract)
+var registeredNativeContracts = make(map[crypto.Address]NativeContract)
 
-func RegisteredNativeContract(address Word256) bool {
+func IsRegisteredNativeContract(address crypto.Address) bool {
 	_, ok := registeredNativeContracts[address]
 	return ok
 }
 
-func RegisterNativeContract(addr Word256, fn NativeContract) bool {
-	_, exists := registeredNativeContracts[addr]
+func RegisterNativeContract(address crypto.Address, fn NativeContract) bool {
+	_, exists := registeredNativeContracts[address]
 	if exists {
 		return false
 	}
-	registeredNativeContracts[addr] = fn
+	registeredNativeContracts[address] = fn
 	return true
 }
 
@@ -46,18 +47,33 @@ func init() {
 
 func registerNativeContracts() {
 	// registeredNativeContracts[Int64ToWord256(1)] = ecrecoverFunc
-	registeredNativeContracts[Int64ToWord256(2)] = sha256Func
-	registeredNativeContracts[Int64ToWord256(3)] = ripemd160Func
-	registeredNativeContracts[Int64ToWord256(4)] = identityFunc
+	registeredNativeContracts[crypto.Address{2}] = sha256Func
+	registeredNativeContracts[crypto.Address{3}] = ripemd160Func
+	registeredNativeContracts[crypto.Address{4}] = identityFunc
 }
 
 //-----------------------------------------------------------------------------
 
-type NativeContract func(state acm.StateWriter, caller acm.Account, input []byte, gas *uint64,
-	logger logging_types.InfoTraceLogger) (output []byte, err error)
+func ExecuteNativeContract(address crypto.Address, st Interface, caller crypto.Address, input []byte, gas *uint64,
+	logger *logging.Logger) ([]byte, errors.CodedError) {
+
+	contract, ok := registeredNativeContracts[address]
+	if !ok {
+		return nil, errors.ErrorCodef(errors.ErrorCodeNativeFunction,
+			"no native contract registered at address: %v", address)
+	}
+	output, err := contract(st, caller, input, gas, logger)
+	if err != nil {
+		return nil, errors.NewException(errors.ErrorCodeNativeFunction, err.Error())
+	}
+	return output, nil
+}
+
+type NativeContract func(state Interface, caller crypto.Address, input []byte, gas *uint64,
+	logger *logging.Logger) (output []byte, err error)
 
 /* Removed due to C dependency
-func ecrecoverFunc(state State, caller *acm.Account, input []byte, gas *int64) (output []byte, err error) {
+func ecrecoverFunc(state State, caller crypto.Address, input []byte, gas *int64) (output []byte, err error) {
 	// Deduct gas
 	gasRequired := GasEcRecover
 	if *gas < gasRequired {
@@ -73,18 +89,19 @@ func ecrecoverFunc(state State, caller *acm.Account, input []byte, gas *int64) (
 	recovered, err := secp256k1.RecoverPubkey(hash, sig)
 	if err != nil {
 		return nil, err
+OH NO STOCASTIC CAT CODING!!!!
 	}
 	hashed := sha3.Sha3(recovered[1:])
 	return LeftPadBytes(hashed, 32), nil
 }
 */
 
-func sha256Func(state acm.StateWriter, caller acm.Account, input []byte, gas *uint64,
-	logger logging_types.InfoTraceLogger) (output []byte, err error) {
+func sha256Func(state Interface, caller crypto.Address, input []byte, gas *uint64,
+	logger *logging.Logger) (output []byte, err error) {
 	// Deduct gas
 	gasRequired := uint64((len(input)+31)/32)*GasSha256Word + GasSha256Base
 	if *gas < gasRequired {
-		return nil, ErrInsufficientGas
+		return nil, errors.ErrorCodeInsufficientGas
 	} else {
 		*gas -= gasRequired
 	}
@@ -95,12 +112,12 @@ func sha256Func(state acm.StateWriter, caller acm.Account, input []byte, gas *ui
 	return hasher.Sum(nil), nil
 }
 
-func ripemd160Func(state acm.StateWriter, caller acm.Account, input []byte, gas *uint64,
-	logger logging_types.InfoTraceLogger) (output []byte, err error) {
+func ripemd160Func(state Interface, caller crypto.Address, input []byte, gas *uint64,
+	logger *logging.Logger) (output []byte, err error) {
 	// Deduct gas
 	gasRequired := uint64((len(input)+31)/32)*GasRipemd160Word + GasRipemd160Base
 	if *gas < gasRequired {
-		return nil, ErrInsufficientGas
+		return nil, errors.ErrorCodeInsufficientGas
 	} else {
 		*gas -= gasRequired
 	}
@@ -111,12 +128,12 @@ func ripemd160Func(state acm.StateWriter, caller acm.Account, input []byte, gas 
 	return LeftPadBytes(hasher.Sum(nil), 32), nil
 }
 
-func identityFunc(state acm.StateWriter, caller acm.Account, input []byte, gas *uint64,
-	logger logging_types.InfoTraceLogger) (output []byte, err error) {
+func identityFunc(state Interface, caller crypto.Address, input []byte, gas *uint64,
+	logger *logging.Logger) (output []byte, err error) {
 	// Deduct gas
 	gasRequired := uint64((len(input)+31)/32)*GasIdentityWord + GasIdentityBase
 	if *gas < gasRequired {
-		return nil, ErrInsufficientGas
+		return nil, errors.ErrorCodeInsufficientGas
 	} else {
 		*gas -= gasRequired
 	}

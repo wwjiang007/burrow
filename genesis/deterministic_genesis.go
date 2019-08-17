@@ -5,7 +5,8 @@ import (
 	"math/rand"
 	"time"
 
-	acm "github.com/hyperledger/burrow/account"
+	"github.com/hyperledger/burrow/acm"
+	"github.com/hyperledger/burrow/crypto"
 	"github.com/hyperledger/burrow/permission"
 )
 
@@ -20,35 +21,44 @@ func NewDeterministicGenesis(seed int64) *deterministicGenesis {
 	}
 }
 
-func (dg *deterministicGenesis) GenesisDoc(numAccounts int, randBalance bool, minBalance uint64, numValidators int,
-	randBonded bool, minBonded int64) (*GenesisDoc, []acm.PrivateAccount) {
-
-	accounts := make([]Account, numAccounts)
-	privAccounts := make([]acm.PrivateAccount, numAccounts)
+func (dg *deterministicGenesis) GenesisDoc(numAccounts int, numValidators int) (*GenesisDoc, []*acm.PrivateAccount, []*acm.PrivateAccount) {
+	accounts := make([]Account, numAccounts+numValidators)
+	privAccounts := make([]*acm.PrivateAccount, numAccounts)
 	defaultPerms := permission.DefaultAccountPermissions
 	for i := 0; i < numAccounts; i++ {
-		account, privAccount := dg.Account(randBalance, minBalance)
-		accounts[i] = Account{
+		account, privAccount := dg.Account(9999999)
+		acc := Account{
 			BasicAccount: BasicAccount{
-				Address: account.Address(),
-				Amount:  account.Balance(),
+				Address: account.GetAddress(),
+				Amount:  account.Balance,
 			},
 			Permissions: defaultPerms.Clone(), // This will get copied into each state.Account.
 		}
+		acc.Permissions.Base.Set(permission.Root, true)
+		accounts[i] = acc
 		privAccounts[i] = privAccount
 	}
 	validators := make([]Validator, numValidators)
+	privValidators := make([]*acm.PrivateAccount, numValidators)
 	for i := 0; i < numValidators; i++ {
 		validator := acm.GeneratePrivateAccountFromSecret(fmt.Sprintf("val_%v", i))
+		privValidators[i] = validator
+		basicAcc := BasicAccount{
+			Address:   validator.GetAddress(),
+			PublicKey: validator.GetPublicKey(),
+			// Avoid max validator cap
+			Amount: uint64(dg.random.Int63()/16 + 1),
+		}
+		fullAcc := Account{
+			BasicAccount: basicAcc,
+			Permissions:  defaultPerms.Clone(),
+		}
+		accounts[numAccounts+i] = fullAcc
 		validators[i] = Validator{
-			BasicAccount: BasicAccount{
-				Address:   validator.Address(),
-				PublicKey: validator.PublicKey(),
-				Amount:    uint64(dg.random.Int63()),
-			},
+			BasicAccount: basicAcc,
 			UnbondTo: []BasicAccount{
 				{
-					Address: validator.Address(),
+					Address: validator.GetAddress(),
 					Amount:  uint64(dg.random.Int63()),
 				},
 			},
@@ -56,33 +66,31 @@ func (dg *deterministicGenesis) GenesisDoc(numAccounts int, randBalance bool, mi
 	}
 	return &GenesisDoc{
 		ChainName:   "TestChain",
-		GenesisTime: time.Unix(1506172037, 0),
+		GenesisTime: time.Unix(1506172037, 0).UTC(),
 		Accounts:    accounts,
 		Validators:  validators,
-	}, privAccounts
+	}, privAccounts, privValidators
 
 }
 
-func (dg *deterministicGenesis) Account(randBalance bool, minBalance uint64) (acm.Account, acm.PrivateAccount) {
-	privateKey, err := acm.GeneratePrivateKey(dg.random)
+func (dg *deterministicGenesis) Account(minBalance uint64) (*acm.Account, *acm.PrivateAccount) {
+	privateKey, err := crypto.GeneratePrivateKey(dg.random, crypto.CurveTypeEd25519)
 	if err != nil {
 		panic(fmt.Errorf("could not generate private key deterministically"))
 	}
 	privAccount := &acm.ConcretePrivateAccount{
-		PublicKey:  privateKey.PublicKey(),
+		PublicKey:  privateKey.GetPublicKey(),
 		PrivateKey: privateKey,
-		Address:    privateKey.PublicKey().Address(),
+		Address:    privateKey.GetPublicKey().GetAddress(),
 	}
 	perms := permission.DefaultAccountPermissions
-	acc := &acm.ConcreteAccount{
+	acc := &acm.Account{
 		Address:     privAccount.Address,
 		PublicKey:   privAccount.PublicKey,
 		Sequence:    uint64(dg.random.Int()),
 		Balance:     minBalance,
 		Permissions: perms,
 	}
-	if randBalance {
-		acc.Balance += uint64(dg.random.Int())
-	}
-	return acc.Account(), privAccount.PrivateAccount()
+	acc.Balance += uint64(dg.random.Int())
+	return acc, privAccount.PrivateAccount()
 }

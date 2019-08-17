@@ -49,6 +49,9 @@ const (
 	XOR
 	NOT
 	BYTE
+	SHL
+	SHR
+	SAR
 
 	SHA3 = 0x20
 )
@@ -68,10 +71,12 @@ const (
 	GASPRICE_DEPRECATED
 	EXTCODESIZE
 	EXTCODECOPY
+	RETURNDATASIZE
+	RETURNDATACOPY
+	EXTCODEHASH // https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1052.md
 )
 
 const (
-
 	// 0x40 range - block operations
 	BLOCKHASH OpCode = 0x40 + iota
 	COINBASE
@@ -182,6 +187,10 @@ const (
 	DELEGATECALL
 
 	// 0x70 range - other
+	STATICCALL   = 0xfa
+	CREATE2      = 0xfb
+	REVERT       = 0xfd
+	INVALID      = 0xfe
 	SELFDESTRUCT = 0xff
 )
 
@@ -210,6 +219,9 @@ var opCodeNames = map[OpCode]string{
 	OR:     "OR",
 	XOR:    "XOR",
 	BYTE:   "BYTE",
+	SHL:    "SHL",
+	SHR:    "SHR",
+	SAR:    "SAR",
 	ADDMOD: "ADDMOD",
 	MULMOD: "MULMOD",
 
@@ -228,6 +240,11 @@ var opCodeNames = map[OpCode]string{
 	CODESIZE:            "CODESIZE",
 	CODECOPY:            "CODECOPY",
 	GASPRICE_DEPRECATED: "TXGASPRICE_DEPRECATED",
+	EXTCODESIZE:         "EXTCODESIZE",
+	EXTCODECOPY:         "EXTCODECOPY",
+	RETURNDATASIZE:      "RETURNDATASIZE",
+	RETURNDATACOPY:      "RETURNDATACOPY",
+	EXTCODEHASH:         "EXTCODEHASH",
 
 	// 0x40 range - block operations
 	BLOCKHASH:             "BLOCKHASH",
@@ -236,8 +253,6 @@ var opCodeNames = map[OpCode]string{
 	BLOCKHEIGHT:           "BLOCKHEIGHT",
 	DIFFICULTY_DEPRECATED: "DIFFICULTY_DEPRECATED",
 	GASLIMIT:              "GASLIMIT",
-	EXTCODESIZE:           "EXTCODESIZE",
-	EXTCODECOPY:           "EXTCODECOPY",
 
 	// 0x50 range - 'storage' and execution
 	POP:      "POP",
@@ -332,8 +347,11 @@ var opCodeNames = map[OpCode]string{
 	RETURN:       "RETURN",
 	CALLCODE:     "CALLCODE",
 	DELEGATECALL: "DELEGATECALL",
-
+	STATICCALL:   "STATICCALL",
 	// 0x70 range - other
+	CREATE2:      "CREATE2",
+	REVERT:       "REVERT",
+	INVALID:      "INVALID",
 	SELFDESTRUCT: "SELFDESTRUCT",
 }
 
@@ -351,7 +369,7 @@ func (o OpCode) String() string {
 func (o OpCode) Name() string {
 	str := opCodeNames[o]
 	if len(str) == 0 {
-		return fmt.Sprintf("Missing opcode 0x%x", int(o))
+		return fmt.Sprintf("Non-opcode 0x%x", int(o))
 	}
 
 	return str

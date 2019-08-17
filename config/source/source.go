@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strings"
 
+	"regexp"
+
 	"github.com/BurntSushi/toml"
 	"github.com/cep21/xdgbasedir"
 	"github.com/imdario/mergo"
@@ -31,10 +33,26 @@ type ConfigProvider interface {
 
 var _ ConfigProvider = &configSource{}
 
+type Format string
+
+const (
+	JSON    Format = "JSON"
+	TOML    Format = "TOML"
+	Unknown Format = ""
+)
+
+var LogWriter io.Writer
+
+var jsonRegex = regexp.MustCompile(`^\s*{`)
+
 type configSource struct {
 	from  string
 	skip  bool
 	apply func(baseConfig interface{}) error
+}
+
+func init() {
+	LogWriter = os.Stderr
 }
 
 func NewConfigProvider(from string, skip bool, apply func(baseConfig interface{}) error) *configSource {
@@ -70,7 +88,7 @@ func (cs *configSource) SetSkip(skip bool) ConfigProvider {
 // in two distinct modes: with shortCircuit true the first successful ConfigProvider source
 // is returned. With shortCircuit false sources appearing later are used to possibly override
 // those appearing earlier
-func Cascade(logWriter io.Writer, shortCircuit bool, providers ...ConfigProvider) *configSource {
+func Cascade(shortCircuit bool, providers ...ConfigProvider) *configSource {
 	var fromStrings []string
 	skip := true
 	for _, provider := range providers {
@@ -93,7 +111,7 @@ func Cascade(logWriter io.Writer, shortCircuit bool, providers ...ConfigProvider
 			}
 			for _, provider := range providers {
 				if !provider.Skip() {
-					writeLog(logWriter, fmt.Sprintf("Sourcing config from %s", provider.From()))
+					writeLog(LogWriter, fmt.Sprintf("Sourcing config from %s", provider.From()))
 					err := provider.Apply(baseConfig)
 					if err != nil {
 						return err
@@ -109,33 +127,27 @@ func Cascade(logWriter io.Writer, shortCircuit bool, providers ...ConfigProvider
 }
 
 func FirstOf(providers ...ConfigProvider) *configSource {
-	return Cascade(os.Stderr, true, providers...)
+	return Cascade(true, providers...)
 }
 
 func EachOf(providers ...ConfigProvider) *configSource {
-	return Cascade(os.Stderr, false, providers...)
+	return Cascade(false, providers...)
 }
 
-// Try to source config from provided JSON file, is skipNonExistent is true then the provider will fall-through (skip)
-// when the file doesn't exist, rather than returning an error
-func JSONFile(configFile string, skipNonExistent bool) *configSource {
-	return &configSource{
-		skip: ShouldSkipFile(configFile, skipNonExistent),
-		from: fmt.Sprintf("JSON config file at '%s'", configFile),
-		apply: func(baseConfig interface{}) error {
-			return FromJSONFile(configFile, baseConfig)
-		},
+// Try to source config from provided file detecting the file format, is skipNonExistent is true then the provider will
+// fall-through (skip) when the file doesn't exist, rather than returning an error
+func File(configFile string, skipNonExistent bool) *configSource {
+	var from string
+	if configFile == STDINFileIdentifier {
+		from = "Config from STDIN"
+	} else {
+		from = fmt.Sprintf("Config file at '%s'", configFile)
 	}
-}
-
-// Try to source config from provided TOML file, is skipNonExistent is true then the provider will fall-through (skip)
-// when the file doesn't exist, rather than returning an error
-func TOMLFile(configFile string, skipNonExistent bool) *configSource {
 	return &configSource{
 		skip: ShouldSkipFile(configFile, skipNonExistent),
-		from: fmt.Sprintf("TOML config file at '%s'", configFile),
+		from: from,
 		apply: func(baseConfig interface{}) error {
-			return FromTOMLFile(configFile, baseConfig)
+			return FromFile(configFile, baseConfig)
 		},
 	}
 }
@@ -157,19 +169,19 @@ func XDGBaseDir(configFileName string) *configSource {
 			if err != nil {
 				return err
 			}
-			return FromTOMLFile(configFile, baseConfig)
+			return FromFile(configFile, baseConfig)
 		},
 	}
 }
 
 // Source from a single environment variable with config embedded in JSON
 func Environment(key string) *configSource {
-	jsonString := os.Getenv(key)
+	configString := os.Getenv(key)
 	return &configSource{
-		skip: jsonString == "",
-		from: fmt.Sprintf("'%s' environment variable (as JSON)", key),
+		skip: configString == "",
+		from: fmt.Sprintf("'%s' environment variable", key),
 		apply: func(baseConfig interface{}) error {
-			return FromJSONString(jsonString, baseConfig)
+			return FromString(configString, baseConfig)
 		},
 	}
 }
@@ -183,22 +195,13 @@ func Default(defaultConfig interface{}) *configSource {
 	}
 }
 
-func FromJSONFile(configFile string, conf interface{}) error {
+func FromFile(configFile string, conf interface{}) error {
 	bs, err := ReadFile(configFile)
 	if err != nil {
 		return err
 	}
 
-	return FromJSONString(string(bs), conf)
-}
-
-func FromTOMLFile(configFile string, conf interface{}) error {
-	bs, err := ReadFile(configFile)
-	if err != nil {
-		return err
-	}
-
-	return FromTOMLString(string(bs), conf)
+	return FromString(string(bs), conf)
 }
 
 func FromTOMLString(tomlString string, conf interface{}) error {
@@ -207,6 +210,24 @@ func FromTOMLString(tomlString string, conf interface{}) error {
 		return err
 	}
 	return nil
+}
+
+func FromString(configString string, conf interface{}) error {
+	switch DetectFormat(configString) {
+	case JSON:
+		return FromJSONString(configString, conf)
+	case TOML:
+		return FromTOMLString(configString, conf)
+	default:
+		return fmt.Errorf("unknown configuration format:\n%s", configString)
+	}
+}
+
+func DetectFormat(configString string) Format {
+	if jsonRegex.MatchString(configString) {
+		return JSON
+	}
+	return TOML
 }
 
 func FromJSONString(jsonString string, conf interface{}) error {
@@ -228,7 +249,7 @@ func TOMLString(conf interface{}) string {
 }
 
 func JSONString(conf interface{}) string {
-	bs, err := json.MarshalIndent(conf, "", "\t")
+	bs, err := json.MarshalIndent(conf, "", "  ")
 	if err != nil {
 		return fmt.Sprintf("<Could not serialise config: %v>", err)
 	}

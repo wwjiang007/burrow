@@ -3,7 +3,8 @@ package spec
 import (
 	"testing"
 
-	"github.com/hyperledger/burrow/keys"
+	"github.com/hyperledger/burrow/acm/balance"
+	"github.com/hyperledger/burrow/crypto"
 	"github.com/hyperledger/burrow/keys/mock"
 	"github.com/hyperledger/burrow/permission"
 	"github.com/stretchr/testify/assert"
@@ -11,13 +12,13 @@ import (
 )
 
 func TestGenesisSpec_GenesisDoc(t *testing.T) {
-	keyClient := mock.NewMockKeyClient()
+	keyClient := mock.NewKeyClient()
 
 	// Try a spec with a single account/validator
 	amtBonded := uint64(100)
 	genesisSpec := GenesisSpec{
 		Accounts: []TemplateAccount{{
-			AmountBonded: &amtBonded,
+			Amounts: balance.New().Power(amtBonded),
 		}},
 	}
 
@@ -33,7 +34,7 @@ func TestGenesisSpec_GenesisDoc(t *testing.T) {
 	assert.Equal(t, amtBonded, genesisDoc.Validators[0].Amount)
 	assert.NotEmpty(t, genesisDoc.ChainName, "Chain name should not be empty")
 
-	address, err := keyClient.Generate("test-lookup-of-key", keys.KeyTypeEd25519Ripemd160)
+	address, err := keyClient.Generate("test-lookup-of-key", crypto.CurveTypeEd25519)
 	require.NoError(t, err)
 	pubKey, err := keyClient.PublicKey(address)
 	require.NoError(t, err)
@@ -46,7 +47,7 @@ func TestGenesisSpec_GenesisDoc(t *testing.T) {
 				Address: &address,
 			},
 			{
-				Amount:      &amt,
+				Amounts:     balance.New().Native(amt),
 				Permissions: []string{permission.CreateAccountString, permission.CallString},
 			}},
 	}
